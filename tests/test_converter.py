@@ -1263,6 +1263,61 @@ class TestAutoConvert(unittest.TestCase):
     @patch(
         "trac_mcp_server.detection.capabilities.get_server_capabilities"
     )
+    def test_explicit_source_format_overrides_heuristic(
+        self, _mock_caps
+    ):
+        """source_format='markdown' is honored even when content looks like TracWiki.
+
+        Regression test: a Markdown file describing the converter itself
+        contained TracWiki examples (`= Heading =`) inside fenced code blocks.
+        The content heuristic mis-detected the file as TracWiki, so
+        auto_convert short-circuited to a pass-through and the wiki page was
+        stored as raw Markdown. Callers that already know the source format
+        (e.g. from a `.md` extension) must be able to bypass the heuristic.
+        """
+        from trac_mcp_server.converters.common import auto_convert
+
+        mock_config = MagicMock()
+        # Markdown content that contains TracWiki-style headings inside a
+        # fenced code block — the heuristic would otherwise return 'tracwiki'.
+        text = (
+            "# Format Conversion\n"
+            "\n"
+            "Some prose.\n"
+            "\n"
+            "```\n"
+            "TracWiki:  = Heading 1 =\n"
+            "TracWiki:  == Heading 2 ==\n"
+            "```\n"
+        )
+
+        # Without source_format, the heuristic would mis-detect and skip conversion.
+        passthrough = self._run(
+            auto_convert(text, mock_config, target_format="tracwiki")
+        )
+        self.assertFalse(
+            passthrough.converted,
+            "Sanity check: heuristic should mis-detect this content as TracWiki",
+        )
+
+        # With source_format='markdown', conversion must run.
+        result = self._run(
+            auto_convert(
+                text,
+                mock_config,
+                target_format="tracwiki",
+                source_format="markdown",
+            )
+        )
+        self.assertTrue(result.converted)
+        self.assertEqual(result.source_format, "markdown")
+        self.assertEqual(result.target_format, "tracwiki")
+        # The top-level Markdown heading must be converted to TracWiki form.
+        self.assertIn("= Format Conversion =", result.text)
+
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
     def test_returns_conversion_result(self, _mock_caps):
         """Return type is ConversionResult with all expected fields."""
         from trac_mcp_server.converters.common import auto_convert

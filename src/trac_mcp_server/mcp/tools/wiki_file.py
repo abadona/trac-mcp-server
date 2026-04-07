@@ -193,8 +193,16 @@ async def _handle_push(
     warnings: list[str] = []
     converted = False
     if source_format == "markdown":
+        # Pass source_format explicitly so auto_convert doesn't re-run the
+        # content heuristic — a Markdown file containing TracWiki-formatted
+        # examples inside code blocks (e.g. docs describing the converter
+        # itself) would otherwise be mis-detected as TracWiki and pushed
+        # through unchanged.
         conversion = await auto_convert(
-            content, client.config, target_format="tracwiki"
+            content,
+            client.config,
+            target_format="tracwiki",
+            source_format="markdown",
         )
         wiki_content = conversion.text
         converted = conversion.converted

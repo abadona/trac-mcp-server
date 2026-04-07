@@ -209,7 +209,10 @@ def detect_format_heuristic(text: str) -> str:
 
 
 async def auto_convert(
-    text: str, config, target_format: str | None = None
+    text: str,
+    config,
+    target_format: str | None = None,
+    source_format: str | None = None,
 ) -> ConversionResult:
     """Automatically convert text based on server capabilities and source format.
 
@@ -222,6 +225,11 @@ async def auto_convert(
         text: Text to convert
         config: Config with Trac server URL/credentials
         target_format: Optional 'markdown' or 'tracwiki' (None = auto-detect from server)
+        source_format: Optional 'markdown' or 'tracwiki'. When provided, the
+            content heuristic is skipped — use this when the caller already
+            knows the source format (e.g. from a file extension), since the
+            heuristic can be fooled by content that contains examples of the
+            *other* format inside code blocks or prose.
 
     Returns:
         ConversionResult with converted text and metadata
@@ -247,8 +255,9 @@ async def auto_convert(
             # Capabilities detection failed, default to TracWiki
             target_format = "tracwiki"
 
-    # Detect source format
-    source_format = detect_format_heuristic(text)
+    # Detect source format only when caller didn't supply one
+    if source_format is None:
+        source_format = detect_format_heuristic(text)
 
     # Convert if formats differ
     if source_format == target_format:
