@@ -103,6 +103,25 @@ WIKI_READ_TOOLS = [
             "required": [],
         },
     ),
+    types.Tool(
+        name="wiki_get_history",
+        description="Get wiki page revision history newest-first. Returns list of revisions with version, author, lastModified, and comment (commit message). Useful for detecting prior edits or scanning attribution markers in change comments.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "page_name": {
+                    "type": "string",
+                    "description": "Wiki page name to retrieve history for (required)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum revisions to return, newest first. Omit for all revisions.",
+                    "minimum": 1,
+                },
+            },
+            "required": ["page_name"],
+        },
+    ),
 ]
 
 
@@ -421,6 +440,95 @@ async def _handle_recent_changes(
     )
 
 
+async def _handle_get_history(
+    client: TracClient, args: dict
+) -> types.CallToolResult:
+    """Handle wiki_get_history.
+
+    Walks the page's version history newest-first, fetching per-version
+    metadata via ``client.get_wiki_page_info(page_name, version)``. The
+    ``comment`` field (Trac XmlRpcPlugin post trac-hacks #1864) is
+    preserved for attribution-marker scanning by auto-pm's edit workflow.
+    """
+    page_name = args.get("page_name")
+    if not page_name:
+        return build_error_response(
+            "validation_error",
+            "page_name is required",
+            "Provide page_name parameter.",
+        )
+
+    limit = args.get("limit")
+
+    # Fetch current version to determine the walk range
+    try:
+        current_info = await run_sync_limited(
+            client.get_wiki_page_info, page_name
+        )
+    except xmlrpc.client.Fault as err:
+        from .errors import translate_xmlrpc_error
+
+        return translate_xmlrpc_error(err, "wiki", page_name)
+
+    current_version = current_info.get("version", 1)
+    if not isinstance(current_version, int) or current_version < 1:
+        current_version = 1
+
+    # Range newest-first: current, current-1, ..., 1
+    versions = list(range(current_version, 0, -1))
+    if limit is not None and limit > 0:
+        versions = versions[:limit]
+
+    revisions: list[dict] = []
+    for v in versions:
+        try:
+            info = await run_sync_limited(
+                client.get_wiki_page_info, page_name, v
+            )
+        except xmlrpc.client.Fault:
+            # Skip revisions we can't fetch (permissions, gaps) but
+            # keep going — partial history is better than none.
+            continue
+
+        revisions.append(
+            {
+                "version": v,
+                "author": info.get("author", "unknown"),
+                "lastModified": format_timestamp(
+                    info.get("lastModified", "")
+                ),
+                "comment": info.get("comment", "") or "",
+            }
+        )
+
+    # Format human-readable text output
+    if revisions:
+        response_lines = [f"# {page_name} history", ""]
+        for rev in revisions:
+            comment_str = rev["comment"] or "(no comment)"
+            response_lines.append(
+                f"- v{rev['version']} by {rev['author']} at {rev['lastModified']}: {comment_str}"
+            )
+    else:
+        response_lines = [
+            f"# {page_name} history",
+            "",
+            "(no revisions found)",
+        ]
+
+    return types.CallToolResult(
+        content=[
+            types.TextContent(
+                type="text", text="\n".join(response_lines)
+            )
+        ],
+        structuredContent={
+            "page_name": page_name,
+            "revisions": revisions,
+        },
+    )
+
+
 # ToolSpec list for registry-based dispatch
 WIKI_READ_SPECS: list[ToolSpec] = [
     ToolSpec(
@@ -437,5 +545,10 @@ WIKI_READ_SPECS: list[ToolSpec] = [
         tool=WIKI_READ_TOOLS[2],
         permissions=frozenset({"WIKI_VIEW"}),
         handler=_handle_recent_changes,
+    ),
+    ToolSpec(
+        tool=WIKI_READ_TOOLS[3],
+        permissions=frozenset({"WIKI_VIEW"}),
+        handler=_handle_get_history,
     ),
 ]
