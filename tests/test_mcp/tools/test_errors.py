@@ -240,3 +240,35 @@ class TestFormatTimestamp:
         """None -> str(None)."""
         result = format_timestamp(None)
         assert result == "None"
+
+    def test_xmlrpc_datetime(self):
+        """xmlrpc.client.DateTime -> 'YYYY-MM-DD HH:MM'.
+
+        Trac's XML-RPC responses return timestamps wrapped in
+        xmlrpc.client.DateTime. The helper must parse those into a
+        displayable date string, not fall through to str().
+        """
+        xml_dt = xmlrpc.client.DateTime("20260406T00:03:15")
+        result = format_timestamp(xml_dt)
+        # Exact time depends on local tz; check date component only.
+        assert result.startswith("2026-04-0")
+        # Must not be the raw iso-like passthrough
+        assert "T" not in result
+
+    def test_iso8601_compact_string(self):
+        """Compact iso8601 string (no separators) -> 'YYYY-MM-DD HH:MM'.
+
+        trac-mcp-server's custom _parse_xmlrpc_value strips the
+        DateTime wrapper and returns the raw text, so handlers receive
+        strings like "20260406T00:03:15". format_timestamp must parse
+        these for display.
+        """
+        result = format_timestamp("20260406T00:03:15")
+        assert result == "2026-04-06 00:03"
+
+    def test_unknown_string_passthrough(self):
+        """Unrecognized strings still pass through unchanged."""
+        assert format_timestamp("2026-02-01") == "2026-02-01"
+        assert (
+            format_timestamp("some date string") == "some date string"
+        )

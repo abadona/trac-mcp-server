@@ -5,6 +5,7 @@ to help AI agents recover from errors without human intervention, plus
 shared formatting utilities used across tool modules.
 """
 
+import time
 import xmlrpc.client
 from datetime import datetime, timezone
 from typing import Any
@@ -57,9 +58,37 @@ def format_timestamp(timestamp: Any) -> str:
     match timestamp:
         case datetime() as dt:
             return dt.strftime("%Y-%m-%d %H:%M")
+        case xmlrpc.client.DateTime() as dt_val:
+            # xmlrpc.client.DateTime wraps an iso-like string with no
+            # attached tz; convert via timetuple -> mktime (local) then
+            # fall back to string form if conversion fails.
+            try:
+                dt = datetime.fromtimestamp(
+                    time.mktime(dt_val.timetuple())
+                )
+                return dt.strftime("%Y-%m-%d %H:%M")
+            except (ValueError, OverflowError):
+                return str(timestamp)
         case int() | float() as ts:
             dt = datetime.fromtimestamp(ts, tz=timezone.utc)
             return dt.strftime("%Y-%m-%d %H:%M")
+        case str() as s if s:
+            # Trac's XmlRpcPlugin returns iso8601 strings like
+            # "20260406T00:03:15" (compact form, no separators, no tz).
+            # Parse what we recognize; fall back to passthrough for
+            # anything else so we never raise on display formatting.
+            for fmt in (
+                "%Y%m%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+            ):
+                try:
+                    dt = datetime.strptime(s, fmt)
+                    return dt.strftime("%Y-%m-%d %H:%M")
+                except ValueError:
+                    continue
+            return s
         case _:
             return str(timestamp)
 
