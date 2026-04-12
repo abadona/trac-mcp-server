@@ -27,6 +27,7 @@ For quick start and installation, see the [README](../../README.md).
 |----------|----------|-------------|
 | Deployment Guide | [deployment.md](../deployment.md) | Installation, MCP client configuration, credential management |
 | Permissions Guide | [permissions.md](../permissions.md) | Required Trac permissions, security considerations |
+| auto-pm | [auto-pm](https://github.com/nerpatech/auto-pm) | Automated project management client that uses trac-mcp-server to manage Trac tickets and milestones |
 
 ---
 
