@@ -310,12 +310,14 @@ async def _handle_changelog(
                     type="text",
                     text=f"No changelog entries for ticket #{ticket_id}",
                 )
-            ]
+            ],
+            structuredContent={"changelog": [], "ticket_id": ticket_id},
         )
 
     # Format entries
     # Changelog format: [[timestamp, author, field, oldvalue, newvalue, permanent], ...]
     entries = []
+    changelog_json = []
     for entry in changelog:
         timestamp = entry[0]
         author = entry[1]
@@ -345,11 +347,14 @@ async def _handle_changelog(
                     entries.append(
                         f"- {timestamp_str} by {author}: comment: {comment_lines[0]}"
                     )
+                newvalue_text = comment_text
             else:
                 entries.append(
                     f"- {timestamp_str} by {author}: comment added"
                 )
+                newvalue_text = ""
         else:
+            newvalue_text = newvalue
             if oldvalue and newvalue:
                 entries.append(
                     f"- {timestamp_str} by {author}: {field} changed from '{oldvalue}' to '{newvalue}'"
@@ -367,6 +372,16 @@ async def _handle_changelog(
                     f"- {timestamp_str} by {author}: {field} modified"
                 )
 
+        changelog_json.append(
+            {
+                "timestamp": timestamp_str,
+                "author": author,
+                "field": field,
+                "oldvalue": oldvalue,
+                "newvalue": newvalue_text,
+            }
+        )
+
     format_note = " (TracWiki format)" if raw else ""
     response_text = (
         f"Changelog for ticket #{ticket_id}{format_note}:\n"
@@ -374,7 +389,11 @@ async def _handle_changelog(
     )
 
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=response_text)]
+        content=[types.TextContent(type="text", text=response_text)],
+        structuredContent={
+            "changelog": changelog_json,
+            "ticket_id": ticket_id,
+        },
     )
 
 
