@@ -720,6 +720,98 @@ class TracClient:
         """
         self._rpc_request("ticket.milestone", "delete", name)
 
+    # Ticket admin (components and enums)
+
+    def list_components(self) -> list[dict[str, Any]]:
+        """
+        Get all ticket components with their attributes.
+
+        Returns:
+            List of dicts with keys: name, owner, description.
+
+        Raises:
+            xmlrpc.client.Fault: If permissions denied (requires TICKET_VIEW).
+        """
+        names = self._rpc_request("ticket.component", "getAll")
+        result: list[dict[str, Any]] = []
+        for name in names:
+            attrs = self._rpc_request("ticket.component", "get", name)
+            # attrs is typically a dict; normalize to ensure name is present.
+            entry: dict[str, Any] = {"name": name, "owner": "", "description": ""}
+            if isinstance(attrs, dict):
+                entry.update({k: v for k, v in attrs.items() if k in ("owner", "description")})
+            result.append(entry)
+        return result
+
+    def create_component(
+        self,
+        name: str,
+        description: str = "",
+        owner: str = "",
+    ) -> None:
+        """
+        Create a new ticket component.
+
+        Args:
+            name: Component name (required, must be unique).
+            description: Optional description (default: empty string).
+            owner: Optional default owner username (default: empty string).
+
+        Raises:
+            xmlrpc.client.Fault: If component exists, validation fails,
+                or permissions denied (requires TICKET_ADMIN).
+        """
+        attributes: dict[str, Any] = {
+            "description": description,
+            "owner": owner,
+        }
+        self._rpc_request("ticket.component", "create", name, attributes)
+
+    def list_enum(self, enum_type: str) -> list[str]:
+        """
+        Get all values for a Trac enum field.
+
+        Args:
+            enum_type: One of "priority", "resolution", "severity", "type",
+                "version". Must be a valid Trac enum service name.
+
+        Returns:
+            List of enum value names, in Trac's configured order.
+
+        Raises:
+            ValueError: If enum_type is not in the supported whitelist.
+            xmlrpc.client.Fault: If permissions denied (requires TICKET_VIEW).
+        """
+        if enum_type not in {"priority", "resolution", "severity", "type", "version"}:
+            raise ValueError(
+                f"Unsupported enum_type '{enum_type}'. "
+                "Expected one of: priority, resolution, severity, type, version."
+            )
+        return self._rpc_request(f"ticket.{enum_type}", "getAll")
+
+    def create_enum(self, enum_type: str, name: str) -> None:
+        """
+        Create a new value for a Trac enum field.
+
+        Args:
+            enum_type: One of "priority", "resolution", "severity", "type",
+                "version". Must be a valid Trac enum service name.
+            name: New enum value name.
+
+        Raises:
+            ValueError: If enum_type is not in the supported whitelist.
+            xmlrpc.client.Fault: If value exists, validation fails, or
+                permissions denied (requires TICKET_ADMIN).
+        """
+        if enum_type not in {"priority", "resolution", "severity", "type", "version"}:
+            raise ValueError(
+                f"Unsupported enum_type '{enum_type}'. "
+                "Expected one of: priority, resolution, severity, type, version."
+            )
+        # Trac's enum.create takes name and an optional value (display order).
+        # Passing just the name appends to the end at the next available value.
+        self._rpc_request(f"ticket.{enum_type}", "create", name)
+
     # Ticket field metadata
 
     def delete_ticket(self, ticket_id: int) -> bool:

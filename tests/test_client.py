@@ -1940,3 +1940,120 @@ def test_list_methods_success(mock_post, mock_config):
     assert "wiki.getPage" in result
     payload = mock_post.call_args[1]["data"]
     assert "system.listMethods" in payload
+
+
+# --------------------------------------------------------------------------- #
+# Ticket admin: components and enums
+# --------------------------------------------------------------------------- #
+
+
+def test_list_components_returns_list_of_dicts(mock_config):
+    """Test list_components returns enriched component dicts."""
+    client = TracClient(mock_config)
+
+    call_log: list[tuple] = []
+
+    def fake_rpc(service, method, *params):
+        call_log.append((service, method, params))
+        if method == "getAll":
+            return ["a", "b"]
+        if method == "get":
+            if params[0] == "a":
+                return {"name": "a", "owner": "alice", "description": "first"}
+            return {"name": "b", "owner": "bob", "description": ""}
+        raise AssertionError(f"unexpected call: {service}.{method}")
+
+    client._rpc_request = fake_rpc
+    result = client.list_components()
+
+    assert len(result) == 2
+    assert result[0] == {"name": "a", "owner": "alice", "description": "first"}
+    assert result[1] == {"name": "b", "owner": "bob", "description": ""}
+
+
+def test_create_component_calls_xmlrpc_with_attrs(mock_config):
+    """Test create_component forwards name and attributes dict to XML-RPC."""
+    client = TracClient(mock_config)
+
+    call_log: list[tuple] = []
+
+    def fake_rpc(service, method, *params):
+        call_log.append((service, method, params))
+        return None
+
+    client._rpc_request = fake_rpc
+    client.create_component("new", description="desc", owner="")
+
+    assert len(call_log) == 1
+    assert call_log[0] == (
+        "ticket.component",
+        "create",
+        ("new", {"description": "desc", "owner": ""}),
+    )
+
+
+def test_list_enum_priority_returns_list_of_strings(mock_config):
+    """Test list_enum returns the raw list from the RPC call."""
+    client = TracClient(mock_config)
+
+    def fake_rpc(service, method, *params):
+        return ["blocker", "critical", "major"]
+
+    client._rpc_request = fake_rpc
+    result = client.list_enum("priority")
+    assert result == ["blocker", "critical", "major"]
+
+
+def test_list_enum_invalid_type_raises_value_error(mock_config):
+    """Test list_enum raises ValueError for unsupported enum type."""
+    client = TracClient(mock_config)
+
+    call_count = 0
+
+    def fake_rpc(service, method, *params):
+        nonlocal call_count
+        call_count += 1
+        return []
+
+    client._rpc_request = fake_rpc
+
+    with pytest.raises(ValueError, match="Unsupported enum_type 'nonsense'"):
+        client.list_enum("nonsense")
+
+    assert call_count == 0, "No RPC call should be made for invalid enum_type"
+
+
+def test_create_enum_calls_xmlrpc_with_service_name_from_enum_type(mock_config):
+    """Test create_enum routes to the correct ticket.<enum_type>.create service."""
+    client = TracClient(mock_config)
+
+    call_log: list[tuple] = []
+
+    def fake_rpc(service, method, *params):
+        call_log.append((service, method, params))
+        return None
+
+    client._rpc_request = fake_rpc
+    client.create_enum("priority", "urgent")
+
+    assert len(call_log) == 1
+    assert call_log[0] == ("ticket.priority", "create", ("urgent",))
+
+
+def test_create_enum_invalid_type_raises_value_error(mock_config):
+    """Test create_enum raises ValueError for unsupported enum type."""
+    client = TracClient(mock_config)
+
+    call_count = 0
+
+    def fake_rpc(service, method, *params):
+        nonlocal call_count
+        call_count += 1
+        return None
+
+    client._rpc_request = fake_rpc
+
+    with pytest.raises(ValueError, match="Unsupported enum_type 'bogus'"):
+        client.create_enum("bogus", "foo")
+
+    assert call_count == 0, "No RPC call should be made for invalid enum_type"
