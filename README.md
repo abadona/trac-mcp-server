@@ -78,55 +78,6 @@ claude mcp add trac -e TRAC_URL=https://trac.example.com \
 
 Any MCP client that supports stdio transport can launch `trac-mcp-server` as a subprocess. Pass Trac credentials via environment variables.
 
-## Available Tools (27)
-
-### Tickets (11)
-| Tool | Description |
-|------|-------------|
-| `ticket_search` | Search tickets with Trac query language |
-| `ticket_get` | Get ticket details by ID |
-| `ticket_create` | Create new tickets |
-| `ticket_update` | Update existing tickets |
-| `ticket_delete` | Delete tickets |
-| `ticket_changelog` | Get ticket change history |
-| `ticket_fields` | List available ticket fields |
-| `ticket_actions` | Get available ticket actions |
-| `ticket_batch_create` | Create multiple tickets in one batch |
-| `ticket_batch_delete` | Delete multiple tickets in one batch |
-| `ticket_batch_update` | Update multiple tickets in one batch |
-
-### Wiki (6)
-| Tool | Description |
-|------|-------------|
-| `wiki_get` | Get wiki page content (with Markdown conversion) |
-| `wiki_search` | Search wiki pages |
-| `wiki_create` | Create new wiki pages |
-| `wiki_update` | Update existing wiki pages |
-| `wiki_delete` | Delete wiki pages |
-| `wiki_recent_changes` | List recent wiki changes |
-
-### Wiki Files (3)
-| Tool | Description |
-|------|-------------|
-| `wiki_file_push` | Push local file to wiki (auto format conversion) |
-| `wiki_file_pull` | Pull wiki page to local file |
-| `wiki_file_detect_format` | Detect content format (Markdown/TracWiki) |
-
-### Milestones (5)
-| Tool | Description |
-|------|-------------|
-| `milestone_list` | List all milestones |
-| `milestone_get` | Get milestone details |
-| `milestone_create` | Create new milestones |
-| `milestone_update` | Update existing milestones |
-| `milestone_delete` | Delete milestones |
-
-### System (2)
-| Tool | Description |
-|------|-------------|
-| `ping` | Test connectivity and return API version |
-| `get_server_time` | Get Trac server time |
-
 ## Development
 
 ```bash
