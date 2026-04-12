@@ -8,6 +8,7 @@ from .errors import build_error_response
 from .milestone import MILESTONE_SPECS, MILESTONE_TOOLS
 from .registry import ToolRegistry, ToolSpec, load_permissions_file
 from .system import SYSTEM_SPECS, SYSTEM_TOOLS
+from .ticket_admin import TICKET_ADMIN_SPECS, TICKET_ADMIN_TOOLS
 from .ticket_batch import TICKET_BATCH_SPECS, TICKET_BATCH_TOOLS
 from .ticket_read import TICKET_READ_SPECS, TICKET_READ_TOOLS
 from .ticket_write import TICKET_WRITE_SPECS, TICKET_WRITE_TOOLS
@@ -29,6 +30,7 @@ WIKI_SPECS = WIKI_READ_SPECS + WIKI_WRITE_SPECS + WIKI_FILE_SPECS
 
 ALL_SPECS: list[ToolSpec] = (
     SYSTEM_SPECS + TICKET_SPECS + WIKI_SPECS + MILESTONE_SPECS
+    + TICKET_ADMIN_SPECS
 )
 
 __all__ = [
@@ -49,11 +51,13 @@ __all__ = [
     "WIKI_WRITE_SPECS",
     "WIKI_FILE_SPECS",
     "MILESTONE_SPECS",
+    "TICKET_ADMIN_SPECS",
     # Tool lists (backward compat)
     "TICKET_TOOLS",
     "TICKET_READ_TOOLS",
     "TICKET_WRITE_TOOLS",
     "TICKET_BATCH_TOOLS",
+    "TICKET_ADMIN_TOOLS",
     "WIKI_TOOLS",
     "WIKI_READ_TOOLS",
     "WIKI_WRITE_TOOLS",
