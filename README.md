@@ -8,6 +8,8 @@ Standalone MCP server that gives AI agents full access to Trac project managemen
 
 ## Quick Start
 
+Requires Python 3.10 or later.
+
 ```bash
 pip install .
 ```
