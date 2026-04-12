@@ -767,6 +767,19 @@ class TracClient:
         }
         self._rpc_request("ticket.component", "create", name, attributes)
 
+    def delete_component(self, name: str) -> None:
+        """
+        Delete a ticket component.
+
+        Args:
+            name: Component name to delete.
+
+        Raises:
+            xmlrpc.client.Fault: If component doesn't exist, or
+                permissions denied (requires TICKET_ADMIN).
+        """
+        self._rpc_request("ticket.component", "delete", name)
+
     def list_enum(self, enum_type: str) -> list[str]:
         """
         Get all values for a Trac enum field.
@@ -812,6 +825,27 @@ class TracClient:
             )
         # Trac's enum.create requires both name and value (sort order).
         self._rpc_request(f"ticket.{enum_type}", "create", name, value)
+
+    def delete_enum(self, enum_type: str, name: str) -> None:
+        """
+        Delete a value from a Trac enum field.
+
+        Args:
+            enum_type: One of "priority", "resolution", "severity", "type",
+                "version". Must be a valid Trac enum service name.
+            name: Enum value name to delete.
+
+        Raises:
+            ValueError: If enum_type is not in the supported whitelist.
+            xmlrpc.client.Fault: If value doesn't exist, or permissions
+                denied (requires TICKET_ADMIN).
+        """
+        if enum_type not in {"priority", "resolution", "severity", "type", "version"}:
+            raise ValueError(
+                f"Unsupported enum_type '{enum_type}'. "
+                "Expected one of: priority, resolution, severity, type, version."
+            )
+        self._rpc_request(f"ticket.{enum_type}", "delete", name)
 
     # Ticket field metadata
 

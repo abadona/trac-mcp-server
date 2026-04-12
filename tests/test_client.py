@@ -2057,3 +2057,62 @@ def test_create_enum_invalid_type_raises_value_error(mock_config):
         client.create_enum("bogus", "foo")
 
     assert call_count == 0, "No RPC call should be made for invalid enum_type"
+
+
+# -- delete_component --------------------------------------------------------
+
+
+def test_delete_component_sends_name(mock_config):
+    """Test delete_component sends correct service/method/name to _rpc_request."""
+    client = TracClient(mock_config)
+
+    call_log: list[tuple] = []
+
+    def fake_rpc(service, method, *params):
+        call_log.append((service, method, params))
+        return None
+
+    client._rpc_request = fake_rpc
+    client.delete_component("component1")
+
+    assert len(call_log) == 1
+    assert call_log[0] == ("ticket.component", "delete", ("component1",))
+
+
+# -- delete_enum -------------------------------------------------------------
+
+
+def test_delete_enum_sends_name_and_type(mock_config):
+    """Test delete_enum routes to ticket.<enum_type>.delete with correct name."""
+    client = TracClient(mock_config)
+
+    call_log: list[tuple] = []
+
+    def fake_rpc(service, method, *params):
+        call_log.append((service, method, params))
+        return None
+
+    client._rpc_request = fake_rpc
+    client.delete_enum("type", "defect")
+
+    assert len(call_log) == 1
+    assert call_log[0] == ("ticket.type", "delete", ("defect",))
+
+
+def test_delete_enum_rejects_invalid_type(mock_config):
+    """Test delete_enum raises ValueError for unsupported enum type."""
+    client = TracClient(mock_config)
+
+    call_count = 0
+
+    def fake_rpc(service, method, *params):
+        nonlocal call_count
+        call_count += 1
+        return None
+
+    client._rpc_request = fake_rpc
+
+    with pytest.raises(ValueError, match="Unsupported enum_type 'bogus'"):
+        client.delete_enum("bogus", "foo")
+
+    assert call_count == 0, "No RPC call should be made for invalid enum_type"
