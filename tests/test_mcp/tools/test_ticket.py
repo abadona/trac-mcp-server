@@ -1335,6 +1335,255 @@ class TestHandleTicketChangelog:
         assert "Error (validation_error)" in result.content[0].text
         assert "ticket_id is required" in result.content[0].text
 
+    # --- structuredContent tests ---
+
+    def test_changelog_structured_content_present(self):
+        """structuredContent is present with changelog key and ticket_id."""
+        client = MagicMock(spec=TracClient)
+        ts = datetime(2026, 1, 20, 10, 0, 0)
+
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = [
+                [ts, "alice", "status", "new", "assigned", 1],
+            ]
+
+            result = self._run(
+                _handle_changelog(client, {"ticket_id": 7})
+            )
+
+            assert result.structuredContent is not None
+            assert "changelog" in result.structuredContent
+            assert "ticket_id" in result.structuredContent
+            assert result.structuredContent["ticket_id"] == 7
+
+    def test_changelog_structured_content_entry_keys(self):
+        """Each entry in structuredContent changelog has required keys."""
+        client = MagicMock(spec=TracClient)
+        ts = datetime(2026, 2, 15, 14, 30, 0)
+
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.tracwiki_to_markdown"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = [
+                [ts, "alice", "status", "new", "assigned", 1],
+                [ts, "bob", "comment", "", "Fixed it", 1],
+            ]
+            mock_convert.return_value = ConversionResult(
+                text="Fixed it",
+                source_format="tracwiki",
+                target_format="markdown",
+                converted=True,
+            )
+
+            result = self._run(
+                _handle_changelog(client, {"ticket_id": 5})
+            )
+
+            changelog = result.structuredContent["changelog"]
+            assert len(changelog) == 2
+            expected_keys = {
+                "timestamp",
+                "author",
+                "field",
+                "oldvalue",
+                "newvalue",
+            }
+            for entry in changelog:
+                assert set(entry.keys()) == expected_keys
+
+    def test_changelog_structured_content_field_change(self):
+        """Field-change entries preserve oldvalue/newvalue strings."""
+        client = MagicMock(spec=TracClient)
+        ts = datetime(2026, 3, 1, 9, 0, 0)
+
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = [
+                [ts, "alice", "priority", "minor", "major", 1],
+                [ts, "alice", "milestone", "", "v2.0", 1],
+            ]
+
+            result = self._run(
+                _handle_changelog(client, {"ticket_id": 10})
+            )
+
+            changelog = result.structuredContent["changelog"]
+            assert len(changelog) == 2
+
+            # First entry: field change with both old and new
+            assert changelog[0]["field"] == "priority"
+            assert changelog[0]["oldvalue"] == "minor"
+            assert changelog[0]["newvalue"] == "major"
+            assert changelog[0]["author"] == "alice"
+
+            # Second entry: field set (no oldvalue)
+            assert changelog[1]["field"] == "milestone"
+            assert changelog[1]["oldvalue"] == ""
+            assert changelog[1]["newvalue"] == "v2.0"
+
+    def test_changelog_structured_content_comment_converted(self):
+        """Comment entries have newvalue converted to Markdown by default."""
+        client = MagicMock(spec=TracClient)
+        ts = datetime(2026, 3, 5, 12, 0, 0)
+
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.tracwiki_to_markdown"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = [
+                [
+                    ts,
+                    "bob",
+                    "comment",
+                    "",
+                    "= Wiki heading =\n\nSome '''bold''' text",
+                    1,
+                ],
+            ]
+            mock_convert.return_value = ConversionResult(
+                text="# Wiki heading\n\nSome **bold** text",
+                source_format="tracwiki",
+                target_format="markdown",
+                converted=True,
+            )
+
+            result = self._run(
+                _handle_changelog(client, {"ticket_id": 3})
+            )
+
+            changelog = result.structuredContent["changelog"]
+            assert len(changelog) == 1
+            assert changelog[0]["field"] == "comment"
+            assert (
+                changelog[0]["newvalue"]
+                == "# Wiki heading\n\nSome **bold** text"
+            )
+            mock_convert.assert_called_once()
+
+    def test_changelog_structured_content_comment_raw(self):
+        """Comment entries preserve raw TracWiki when raw=True."""
+        client = MagicMock(spec=TracClient)
+        ts = datetime(2026, 3, 5, 12, 0, 0)
+
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.tracwiki_to_markdown"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = [
+                [
+                    ts,
+                    "bob",
+                    "comment",
+                    "",
+                    "= Wiki heading =",
+                    1,
+                ],
+            ]
+
+            result = self._run(
+                _handle_changelog(client, {"ticket_id": 3, "raw": True})
+            )
+
+            changelog = result.structuredContent["changelog"]
+            assert len(changelog) == 1
+            assert changelog[0]["newvalue"] == "= Wiki heading ="
+            mock_convert.assert_not_called()
+
+    def test_changelog_structured_content_empty(self):
+        """Empty changelog returns empty array in structuredContent."""
+        client = MagicMock(spec=TracClient)
+
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = []
+
+            result = self._run(
+                _handle_changelog(client, {"ticket_id": 99})
+            )
+
+            assert result.structuredContent is not None
+            assert result.structuredContent["changelog"] == []
+            assert result.structuredContent["ticket_id"] == 99
+
+    def test_changelog_structured_content_empty_comment(self):
+        """Empty comment newvalue produces empty string in structuredContent."""
+        client = MagicMock(spec=TracClient)
+        ts = datetime(2026, 4, 1, 8, 0, 0)
+
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = [
+                [ts, "alice", "comment", "", "", 1],
+            ]
+
+            result = self._run(
+                _handle_changelog(client, {"ticket_id": 15})
+            )
+
+            changelog = result.structuredContent["changelog"]
+            assert len(changelog) == 1
+            assert changelog[0]["field"] == "comment"
+            assert changelog[0]["newvalue"] == ""
+
+    def test_changelog_text_output_unchanged_with_structured(self):
+        """Text output format is unchanged when structuredContent is added."""
+        client = MagicMock(spec=TracClient)
+        ts = datetime(2026, 1, 20, 10, 0, 0)
+
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.tracwiki_to_markdown"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = [
+                [ts, "alice", "status", "new", "assigned", 1],
+                [ts, "bob", "comment", "", "Fixed the bug", 1],
+            ]
+            mock_convert.return_value = ConversionResult(
+                text="Fixed the bug",
+                source_format="tracwiki",
+                target_format="markdown",
+                converted=True,
+            )
+
+            result = self._run(
+                _handle_changelog(client, {"ticket_id": 5})
+            )
+
+            # Verify text output is still present and correct
+            text = result.content[0].text
+            assert "Changelog for ticket #5" in text
+            assert "alice" in text
+            assert "status" in text
+            assert "bob" in text
+            assert "comment" in text
+            assert "Fixed the bug" in text
+
+            # And structuredContent is also present
+            assert result.structuredContent is not None
+            assert len(result.structuredContent["changelog"]) == 2
+
 
 class TestHandleTicketFields:
     """Tests for _handle_fields handler."""

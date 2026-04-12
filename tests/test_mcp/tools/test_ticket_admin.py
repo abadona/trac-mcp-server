@@ -6,9 +6,8 @@ ticket_enum_create, ticket_enum_list, ticket_component_delete,
 ticket_enum_delete.
 """
 
-import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from mcp.types import CallToolResult
@@ -36,12 +35,15 @@ def mock_client():
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_component_create_calls_client(mock_run_sync, mock_client):
+async def test_component_create_calls_client(
+    mock_run_sync, mock_client
+):
     """Test _handle_component_create forwards args to client.create_component."""
     mock_run_sync.return_value = None
 
     result = await _handle_component_create(
-        mock_client, {"name": "foo", "description": "bar", "owner": "alice"}
+        mock_client,
+        {"name": "foo", "description": "bar", "owner": "alice"},
     )
 
     mock_run_sync.assert_called_once_with(
@@ -55,7 +57,9 @@ async def test_component_create_calls_client(mock_run_sync, mock_client):
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_component_create_rejects_empty_name(mock_run_sync, mock_client):
+async def test_component_create_rejects_empty_name(
+    mock_run_sync, mock_client
+):
     """Test _handle_component_create returns validation error for empty name."""
     result = await _handle_component_create(mock_client, {"name": ""})
 
@@ -70,7 +74,9 @@ async def test_component_create_rejects_empty_name(mock_run_sync, mock_client):
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_component_list_returns_json_text(mock_run_sync, mock_client):
+async def test_component_list_returns_json_text(
+    mock_run_sync, mock_client
+):
     """Test _handle_component_list returns JSON-serialized component data."""
     mock_run_sync.return_value = [
         {"name": "a", "owner": "alice", "description": "one"}
@@ -82,7 +88,9 @@ async def test_component_list_returns_json_text(mock_run_sync, mock_client):
     assert isinstance(result, CallToolResult)
     assert not result.isError
     parsed = json.loads(result.content[0].text)
-    assert parsed == [{"name": "a", "owner": "alice", "description": "one"}]
+    assert parsed == [
+        {"name": "a", "owner": "alice", "description": "one"}
+    ]
 
 
 # -- ticket_enum_create -----------------------------------------------------
@@ -110,7 +118,9 @@ async def test_enum_create_priority(mock_run_sync, mock_client):
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_enum_create_rejects_invalid_type(mock_run_sync, mock_client):
+async def test_enum_create_rejects_invalid_type(
+    mock_run_sync, mock_client
+):
     """Test _handle_enum_create returns validation error for bad enum_type."""
     result = await _handle_enum_create(
         mock_client, {"enum_type": "bogus", "name": "foo"}
@@ -124,7 +134,9 @@ async def test_enum_create_rejects_invalid_type(mock_run_sync, mock_client):
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_enum_create_rejects_empty_name(mock_run_sync, mock_client):
+async def test_enum_create_rejects_empty_name(
+    mock_run_sync, mock_client
+):
     """Test _handle_enum_create returns validation error for empty name."""
     result = await _handle_enum_create(
         mock_client, {"enum_type": "priority", "name": ""}
@@ -149,7 +161,9 @@ async def test_enum_list_returns_json_text(mock_run_sync, mock_client):
         mock_client, {"enum_type": "priority"}
     )
 
-    mock_run_sync.assert_called_once_with(mock_client.list_enum, "priority")
+    mock_run_sync.assert_called_once_with(
+        mock_client.list_enum, "priority"
+    )
     assert isinstance(result, CallToolResult)
     assert not result.isError
     parsed = json.loads(result.content[0].text)
@@ -158,7 +172,9 @@ async def test_enum_list_returns_json_text(mock_run_sync, mock_client):
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_enum_list_rejects_invalid_type(mock_run_sync, mock_client):
+async def test_enum_list_rejects_invalid_type(
+    mock_run_sync, mock_client
+):
     """Test _handle_enum_list returns validation error for bad enum_type."""
     result = await _handle_enum_list(
         mock_client, {"enum_type": "bogus"}
@@ -178,17 +194,17 @@ def test_specs_require_ticket_admin_for_writes():
     specs_by_name = {s.tool.name: s for s in TICKET_ADMIN_SPECS}
 
     # Write tools require TICKET_ADMIN
-    assert specs_by_name["ticket_component_create"].permissions == frozenset(
-        {"TICKET_ADMIN"}
-    )
+    assert specs_by_name[
+        "ticket_component_create"
+    ].permissions == frozenset({"TICKET_ADMIN"})
     assert specs_by_name["ticket_enum_create"].permissions == frozenset(
         {"TICKET_ADMIN"}
     )
 
     # Read tools require only TICKET_VIEW
-    assert specs_by_name["ticket_component_list"].permissions == frozenset(
-        {"TICKET_VIEW"}
-    )
+    assert specs_by_name[
+        "ticket_component_list"
+    ].permissions == frozenset({"TICKET_VIEW"})
     assert specs_by_name["ticket_enum_list"].permissions == frozenset(
         {"TICKET_VIEW"}
     )
@@ -205,11 +221,15 @@ def test_tool_count():
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_component_delete_calls_client(mock_run_sync, mock_client):
+async def test_component_delete_calls_client(
+    mock_run_sync, mock_client
+):
     """Test _handle_component_delete forwards name to client.delete_component."""
     mock_run_sync.return_value = None
 
-    result = await _handle_component_delete(mock_client, {"name": "old-comp"})
+    result = await _handle_component_delete(
+        mock_client, {"name": "old-comp"}
+    )
 
     mock_run_sync.assert_called_once_with(
         mock_client.delete_component, "old-comp"
@@ -222,7 +242,9 @@ async def test_component_delete_calls_client(mock_run_sync, mock_client):
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_component_delete_rejects_empty_name(mock_run_sync, mock_client):
+async def test_component_delete_rejects_empty_name(
+    mock_run_sync, mock_client
+):
     """Test _handle_component_delete returns validation error for empty name."""
     result = await _handle_component_delete(mock_client, {"name": ""})
 
@@ -257,7 +279,9 @@ async def test_enum_delete_calls_client(mock_run_sync, mock_client):
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_enum_delete_rejects_invalid_type(mock_run_sync, mock_client):
+async def test_enum_delete_rejects_invalid_type(
+    mock_run_sync, mock_client
+):
     """Test _handle_enum_delete returns validation error for bad enum_type."""
     result = await _handle_enum_delete(
         mock_client, {"enum_type": "bogus", "name": "foo"}
@@ -271,7 +295,9 @@ async def test_enum_delete_rejects_invalid_type(mock_run_sync, mock_client):
 
 @patch("trac_mcp_server.mcp.tools.ticket_admin.run_sync")
 @pytest.mark.asyncio
-async def test_enum_delete_rejects_empty_name(mock_run_sync, mock_client):
+async def test_enum_delete_rejects_empty_name(
+    mock_run_sync, mock_client
+):
     """Test _handle_enum_delete returns validation error for empty name."""
     result = await _handle_enum_delete(
         mock_client, {"enum_type": "priority", "name": ""}
@@ -290,9 +316,9 @@ def test_specs_require_ticket_admin_for_deletes():
     """Test delete specs require TICKET_ADMIN permission."""
     specs_by_name = {s.tool.name: s for s in TICKET_ADMIN_SPECS}
 
-    assert specs_by_name["ticket_component_delete"].permissions == frozenset(
-        {"TICKET_ADMIN"}
-    )
+    assert specs_by_name[
+        "ticket_component_delete"
+    ].permissions == frozenset({"TICKET_ADMIN"})
     assert specs_by_name["ticket_enum_delete"].permissions == frozenset(
         {"TICKET_ADMIN"}
     )

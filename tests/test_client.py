@@ -1959,7 +1959,11 @@ def test_list_components_returns_list_of_dicts(mock_config):
             return ["a", "b"]
         if method == "get":
             if params[0] == "a":
-                return {"name": "a", "owner": "alice", "description": "first"}
+                return {
+                    "name": "a",
+                    "owner": "alice",
+                    "description": "first",
+                }
             return {"name": "b", "owner": "bob", "description": ""}
         raise AssertionError(f"unexpected call: {service}.{method}")
 
@@ -1967,7 +1971,11 @@ def test_list_components_returns_list_of_dicts(mock_config):
     result = client.list_components()
 
     assert len(result) == 2
-    assert result[0] == {"name": "a", "owner": "alice", "description": "first"}
+    assert result[0] == {
+        "name": "a",
+        "owner": "alice",
+        "description": "first",
+    }
     assert result[1] == {"name": "b", "owner": "bob", "description": ""}
 
 
@@ -2017,13 +2025,19 @@ def test_list_enum_invalid_type_raises_value_error(mock_config):
 
     client._rpc_request = fake_rpc
 
-    with pytest.raises(ValueError, match="Unsupported enum_type 'nonsense'"):
+    with pytest.raises(
+        ValueError, match="Unsupported enum_type 'nonsense'"
+    ):
         client.list_enum("nonsense")
 
-    assert call_count == 0, "No RPC call should be made for invalid enum_type"
+    assert call_count == 0, (
+        "No RPC call should be made for invalid enum_type"
+    )
 
 
-def test_create_enum_calls_xmlrpc_with_service_name_from_enum_type(mock_config):
+def test_create_enum_calls_xmlrpc_with_service_name_from_enum_type(
+    mock_config,
+):
     """Test create_enum routes to the correct ticket.<enum_type>.create service."""
     client = TracClient(mock_config)
 
@@ -2053,10 +2067,14 @@ def test_create_enum_invalid_type_raises_value_error(mock_config):
 
     client._rpc_request = fake_rpc
 
-    with pytest.raises(ValueError, match="Unsupported enum_type 'bogus'"):
+    with pytest.raises(
+        ValueError, match="Unsupported enum_type 'bogus'"
+    ):
         client.create_enum("bogus", "foo")
 
-    assert call_count == 0, "No RPC call should be made for invalid enum_type"
+    assert call_count == 0, (
+        "No RPC call should be made for invalid enum_type"
+    )
 
 
 # -- delete_component --------------------------------------------------------
@@ -2076,7 +2094,11 @@ def test_delete_component_sends_name(mock_config):
     client.delete_component("component1")
 
     assert len(call_log) == 1
-    assert call_log[0] == ("ticket.component", "delete", ("component1",))
+    assert call_log[0] == (
+        "ticket.component",
+        "delete",
+        ("component1",),
+    )
 
 
 # -- delete_enum -------------------------------------------------------------
@@ -2112,7 +2134,11 @@ def test_delete_enum_rejects_invalid_type(mock_config):
 
     client._rpc_request = fake_rpc
 
-    with pytest.raises(ValueError, match="Unsupported enum_type 'bogus'"):
+    with pytest.raises(
+        ValueError, match="Unsupported enum_type 'bogus'"
+    ):
         client.delete_enum("bogus", "foo")
 
-    assert call_count == 0, "No RPC call should be made for invalid enum_type"
+    assert call_count == 0, (
+        "No RPC call should be made for invalid enum_type"
+    )
