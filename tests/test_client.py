@@ -2037,7 +2037,7 @@ def test_create_enum_calls_xmlrpc_with_service_name_from_enum_type(mock_config):
     client.create_enum("priority", "urgent")
 
     assert len(call_log) == 1
-    assert call_log[0] == ("ticket.priority", "create", ("urgent",))
+    assert call_log[0] == ("ticket.priority", "create", ("urgent", 0))
 
 
 def test_create_enum_invalid_type_raises_value_error(mock_config):

@@ -789,7 +789,7 @@ class TracClient:
             )
         return self._rpc_request(f"ticket.{enum_type}", "getAll")
 
-    def create_enum(self, enum_type: str, name: str) -> None:
+    def create_enum(self, enum_type: str, name: str, value: int = 0) -> None:
         """
         Create a new value for a Trac enum field.
 
@@ -797,6 +797,8 @@ class TracClient:
             enum_type: One of "priority", "resolution", "severity", "type",
                 "version". Must be a valid Trac enum service name.
             name: New enum value name.
+            value: Sort-order integer (default: 0). Trac requires this
+                positional argument; passing 0 appends to the end.
 
         Raises:
             ValueError: If enum_type is not in the supported whitelist.
@@ -808,9 +810,8 @@ class TracClient:
                 f"Unsupported enum_type '{enum_type}'. "
                 "Expected one of: priority, resolution, severity, type, version."
             )
-        # Trac's enum.create takes name and an optional value (display order).
-        # Passing just the name appends to the end at the next available value.
-        self._rpc_request(f"ticket.{enum_type}", "create", name)
+        # Trac's enum.create requires both name and value (sort order).
+        self._rpc_request(f"ticket.{enum_type}", "create", name, value)
 
     # Ticket field metadata
 
