@@ -16,7 +16,7 @@
 ## Runtime
 
 **Environment:**
-- Python 3.12.8 (current runtime)
+- Python 3.12.8 (Debian bookworm runtime)
 - Minimum: Python 3.10 (`pyproject.toml` `requires-python = ">=3.10"`)
 - Uses `asyncio` event loop with `asyncio.to_thread()` for sync-to-async bridging (`src/trac_mcp_server/core/async_utils.py`)
 - `tomllib` (stdlib 3.11+) used for TOML parsing with `tomli` fallback for 3.10 (`src/trac_mcp_server/mcp/server.py` lines 253-256)
