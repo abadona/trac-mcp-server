@@ -91,7 +91,7 @@ async def handle_list_tools() -> list[types.Tool]:
         [
             types.Tool(
                 name="ping",
-                description="Test Trac MCP server connectivity and return API version",
+                description="Test Trac MCP server connectivity, validate configuration (TRAC_URL / TRAC_USERNAME / TRAC_PASSWORD), and return the Trac API version tuple",
                 inputSchema={
                     "type": "object",
                     "properties": {},
