@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from trac_mcp_server.config import Config
+from trac_mcp_server.config import Config  # noqa: E402
 
 
 def pytest_addoption(parser):
