@@ -12,7 +12,7 @@ The Trac MCP Server provides 27 tools organized into five categories:
 
 ## ping
 
-**Description:** Test Trac MCP server connectivity and return API version
+**Description:** Test Trac MCP server connectivity, validate configuration (TRAC_URL / TRAC_USERNAME / TRAC_PASSWORD), and return the Trac API version tuple
 
 **Parameters:**
 

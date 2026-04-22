@@ -1,3 +1,12 @@
+"""Logging utilities for the trac-mcp-server package.
+
+Provides a :class:`JsonFormatter` that emits one JSON object per log record
+(JSON-lines output) and a :func:`setup_logging` helper that configures the
+root logger for either MCP mode (file-only logging, so stdout remains clean
+for JSON-RPC traffic) or CLI mode (human-friendly stderr logging, with an
+optional companion log file).
+"""
+
 import json
 import logging
 import os
