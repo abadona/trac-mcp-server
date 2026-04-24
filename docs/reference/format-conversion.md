@@ -111,6 +111,8 @@ Markdown:  [Wiki Link](WikiPage)
 TracWiki:  [wiki:WikiPage Wiki Link]
 ```
 
+> **Note:** Non-URL-shaped "links" (URL portion contains `:` but no `/`, e.g. sentinel tokens like `[auto-pm: state NEEDS_CODE]`) are emitted verbatim as Markdown rather than wrapped as TracWiki wiki links. This preserves machine-readable state markers through round-trip conversion.
+
 **Images:**
 ```
 Markdown:  ![alt](image.png)
