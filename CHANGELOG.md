@@ -17,6 +17,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Network timeout (10s connect, 60s read) on XML-RPC requests
 - 79 new tests covering TracClient methods, error handlers, auto_convert, and logger (781 -> 860 -> 641 after sync removal)
 - `CHANGELOG.md` version history extracted from planning documents
+- `severity` parameter now supported on `ticket_create` and `ticket_update` (previously accepted but dropped)
 
 ### Changed
 - Modernized typing across all source files to Python 3.10+ style (`X | None` instead of `Optional[X]`, built-in generics)
@@ -34,6 +35,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - `set_client()` signature to accept `TracClient | None` (removed type: ignore)
 - Dead code removal: duplicate `get_version()`, unused validator loop, stale imports
 - Live test configuration: `.env` now loaded in conftest for `TRAC_URL` availability
+- Markdown -> TracWiki converter no longer mangles sentinel-shaped markers like `[auto-pm: state NEEDS_CODE]`; non-URL-shaped links are emitted verbatim instead of being wrapped as broken wiki links (#8)
 
 ### Removed
 - Sync subsystem: `doc_sync` and `doc_sync_status` MCP tools, `src/trac_mcp_server/sync/` module, and all sync-related tests (213 tests)
