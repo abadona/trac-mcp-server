@@ -281,6 +281,7 @@ class TestHandleTicketCreate(unittest.TestCase):
                         "description": "Full description",
                         "ticket_type": "enhancement",
                         "priority": "major",
+                        "severity": "blocker",
                         "component": "core",
                         "milestone": "v1.0",
                         "owner": "alice",
@@ -301,11 +302,46 @@ class TestHandleTicketCreate(unittest.TestCase):
             # Verify all optional attributes passed
             attributes = call_args[4]
             self.assertEqual(attributes["priority"], "major")
+            self.assertEqual(attributes["severity"], "blocker")
             self.assertEqual(attributes["component"], "core")
             self.assertEqual(attributes["milestone"], "v1.0")
             self.assertEqual(attributes["owner"], "alice")
             self.assertEqual(attributes["cc"], "bob@test.com")
             self.assertEqual(attributes["keywords"], "test")
+
+    def test_create_with_severity(self):
+        """Severity attribute is forwarded to create_ticket (not dropped)."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = 123
+            mock_convert.return_value = "Converted description"
+
+            result = asyncio.run(
+                _handle_create(
+                    self.mock_client,
+                    {
+                        "summary": "Severity ticket",
+                        "description": "Body",
+                        "severity": "blocker",
+                    },
+                )
+            )
+
+            self.assertIsInstance(result, types.CallToolResult)
+            self.assertFalse(getattr(result, "isError", False))
+            self.assertIn("Created ticket #123", result.content[0].text)
+
+            # Verify severity made it into the attributes dict
+            call_args = mock_run_sync.call_args[0]
+            attributes = call_args[4]
+            self.assertIn("severity", attributes)
+            self.assertEqual(attributes["severity"], "blocker")
 
     def test_create_missing_summary(self):
         """Missing summary returns validation_error."""
