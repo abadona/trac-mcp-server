@@ -141,6 +141,74 @@ plain code
         result = markdown_to_tracwiki("[Section](#section)")
         self.assertEqual(result, "[#section Section]")
 
+    def test_non_url_sentinel_link_refused(self):
+        """Non-URL-shaped "links" like [text](auto-pm:) must not become wiki links.
+
+        Regression test for ticket #8: the converter previously wrapped
+        sentinels such as ``auto-pm:`` as ``[wiki:auto-pm: text]``, which
+        TracWiki then rendered as mangled broken-link output. The url
+        portion must either contain ``/`` or start with a known scheme
+        (http:, https:, mailto:, ftp:); a bare trailing-colon sentinel
+        does not qualify and the original Markdown syntax is preserved.
+        """
+        result = markdown_to_tracwiki("[state NEEDS_CODE](auto-pm:)")
+        self.assertEqual(result, "[state NEEDS_CODE](auto-pm:)")
+        # Must NOT emit a wiki link
+        self.assertNotIn("wiki:", result)
+
+    def test_state_marker_brackets_round_trip(self):
+        """auto-pm state marker [auto-pm: state NEEDS_CODE] survives conversion.
+
+        Regression test for ticket #8: state markers using plain square
+        brackets must pass through the converter unchanged (mistune does
+        not parse these as links, but the test pins the contract).
+        """
+        result = markdown_to_tracwiki("[auto-pm: state NEEDS_CODE]")
+        self.assertEqual(result, "[auto-pm: state NEEDS_CODE]")
+
+    def test_non_url_sentinel_other_shapes(self):
+        """Other non-URL-shaped sentinels are also left alone, not wiki-wrapped."""
+        # Arbitrary sentinel with trailing colon
+        result = markdown_to_tracwiki("[label](sentinel:)")
+        self.assertEqual(result, "[label](sentinel:)")
+        self.assertNotIn("wiki:", result)
+        # Colon-containing non-scheme url with no slash
+        result = markdown_to_tracwiki("[label](foo:bar)")
+        self.assertEqual(result, "[label](foo:bar)")
+        self.assertNotIn("wiki:", result)
+
+    def test_valid_links_still_convert(self):
+        """Existing valid links still convert correctly after the refusal fix.
+
+        Regression guard for ticket #8: URL-shaped links (known schemes,
+        paths containing /) must continue to produce the expected TracWiki
+        output.
+        """
+        # http/https external links
+        self.assertEqual(
+            markdown_to_tracwiki("[docs](http://example.com)"),
+            "[http://example.com docs]",
+        )
+        self.assertEqual(
+            markdown_to_tracwiki("[docs](https://example.com)"),
+            "[https://example.com docs]",
+        )
+        # mailto link
+        self.assertEqual(
+            markdown_to_tracwiki("[mail](mailto:x@y)"),
+            "[mailto:x@y mail]",
+        )
+        # Wiki path with /
+        self.assertEqual(
+            markdown_to_tracwiki("[Phase 1](Planning/Phases/Phase01)"),
+            "[wiki:Planning/Phases/Phase01 Phase 1]",
+        )
+        # Simple wiki page name (no colon, no slash) still treated as wiki
+        self.assertEqual(
+            markdown_to_tracwiki("[Home](HomePage)"),
+            "[wiki:HomePage Home]",
+        )
+
     def test_image_conversion(self):
         """Test image conversion."""
         result = markdown_to_tracwiki("![alt text](image.png)")

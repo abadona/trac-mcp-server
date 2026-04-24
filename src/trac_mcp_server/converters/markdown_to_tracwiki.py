@@ -130,6 +130,11 @@ class TracWikiRenderer(mistune.BaseRenderer):
         Markdown: [text](url)
         TracWiki: [url text] for external URLs
                   [wiki:page text] for internal wiki pages
+
+        Refuses non-URL-shaped "links" (e.g., sentinels like ``auto-pm:``)
+        so state-marker syntax such as ``[auto-pm: state NEEDS_CODE]``
+        survives round-tripping instead of getting mangled into a broken
+        TracWiki link.
         """
         # External URLs - no prefix needed
         if url.startswith(("http://", "https://", "ftp://", "mailto:")):
@@ -138,6 +143,16 @@ class TracWikiRenderer(mistune.BaseRenderer):
         # Anchor-only links - keep as-is
         if url.startswith("#"):
             return f"[{url} {text}]"
+
+        # Refuse non-URL-shaped "links". A real URL or wiki link either
+        # starts with a known scheme (handled above), is an anchor
+        # (handled above), or is a wiki-page-shaped path. The conservative
+        # rule: the url portion must contain "/" OR not contain ":" at all.
+        # A bare trailing-colon sentinel like "auto-pm:" fails both checks
+        # and must NOT be wrapped as a wiki link — emit the original
+        # Markdown link syntax verbatim so the text is preserved downstream.
+        if ":" in url and "/" not in url:
+            return f"[{text}]({url})"
 
         # Internal wiki links - add wiki: prefix
         return f"[wiki:{url} {text}]"
