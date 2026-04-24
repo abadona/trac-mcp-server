@@ -44,6 +44,10 @@ def _build_ticket_create_tool() -> types.Tool:
                     "type": "string",
                     "description": "Priority level",
                 },
+                "severity": {
+                    "type": "string",
+                    "description": "Severity level",
+                },
                 "component": {
                     "type": "string",
                     "description": "Component name",
@@ -95,6 +99,10 @@ TICKET_WRITE_TOOLS = [
                 "priority": {
                     "type": "string",
                     "description": "New priority",
+                },
+                "severity": {
+                    "type": "string",
+                    "description": "New severity",
                 },
                 "component": {
                     "type": "string",
@@ -217,6 +225,8 @@ async def _handle_create(
     # Add optional fields if provided
     if "priority" in args:
         attributes["priority"] = args["priority"]
+    if "severity" in args:
+        attributes["severity"] = args["severity"]
     if "component" in args:
         attributes["component"] = args["component"]
     if "milestone" in args:
@@ -271,6 +281,8 @@ async def _handle_update(
         attributes["status"] = args["status"]
     if "priority" in args:
         attributes["priority"] = args["priority"]
+    if "severity" in args:
+        attributes["severity"] = args["severity"]
     if "component" in args:
         attributes["component"] = args["component"]
     if "milestone" in args:
