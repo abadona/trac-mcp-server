@@ -92,9 +92,25 @@ TICKET_WRITE_TOOLS = [
                     "type": "string",
                     "description": "Comment in Markdown (optional, max 10000 chars)",
                 },
+                "summary": {
+                    "type": "string",
+                    "description": "New summary (ticket title)",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "New description in Markdown (replaces ticket body)",
+                },
+                "type": {
+                    "type": "string",
+                    "description": "New ticket type (e.g. defect, enhancement, task)",
+                },
                 "status": {
                     "type": "string",
-                    "description": "New status",
+                    "description": "New status. Note: Trac workflow gates direct status writes; prefer 'action' for transitions (e.g. action='accept' to move new->accepted).",
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Trac workflow action to perform (e.g. 'accept', 'resolve', 'reopen', 'reassign'). The canonical way to transition a ticket through its workflow. Action-specific input fields are passed via 'action_<action>_<action>_<field>' keys (e.g. action_resolve_resolve_resolution='fixed').",
                 },
                 "priority": {
                     "type": "string",
@@ -295,6 +311,25 @@ async def _handle_update(
         attributes["cc"] = args["cc"]
     if "keywords" in args:
         attributes["keywords"] = args["keywords"]
+    if "summary" in args:
+        attributes["summary"] = args["summary"]
+    if "type" in args:
+        attributes["type"] = args["type"]
+    # Description rewrite: convert from Markdown to TracWiki, mirroring
+    # the comment + create-ticket-description handling.
+    if "description" in args:
+        attributes["description"] = markdown_to_tracwiki(
+            args["description"]
+        )
+    # Workflow action: trigger a Trac workflow transition (e.g. accept,
+    # resolve, reopen). Action-specific input fields follow Trac's
+    # ``action_<action>_<action>_<field>`` convention (e.g.
+    # ``action_resolve_resolve_resolution``) and are forwarded by pattern.
+    if "action" in args:
+        attributes["action"] = args["action"]
+    for key, value in args.items():
+        if key.startswith("action_"):
+            attributes[key] = value
 
     # Update ticket (client handles optimistic locking)
     await run_sync(client.update_ticket, ticket_id, comment, attributes)
@@ -356,5 +391,3 @@ async def _handle_delete(
             )
         ]
     )
-
-

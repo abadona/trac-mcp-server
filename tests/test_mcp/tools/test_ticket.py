@@ -751,6 +751,150 @@ class TestHandleTicketUpdate(unittest.TestCase):
             self.assertEqual(attrs["cc"], "team@test.com")
             self.assertEqual(attrs["keywords"], "release")
 
+    def test_update_summary_field(self):
+        """summary kwarg is forwarded as a ticket attribute (title rewrite)."""
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = True
+            result = asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {"ticket_id": 11, "summary": "Renamed ticket"},
+                )
+            )
+            self.assertIsInstance(result, types.CallToolResult)
+            attrs = mock_run_sync.call_args[0][3]
+            self.assertEqual(attrs["summary"], "Renamed ticket")
+            self.assertIn("updated 1 field(s)", result.content[0].text)
+
+    def test_update_type_field(self):
+        """type kwarg is forwarded (note: Trac's field is `type`, not `ticket_type`)."""
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = True
+            result = asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {"ticket_id": 12, "type": "enhancement"},
+                )
+            )
+            self.assertIsInstance(result, types.CallToolResult)
+            attrs = mock_run_sync.call_args[0][3]
+            self.assertEqual(attrs["type"], "enhancement")
+
+    def test_update_description_field_converts_markdown(self):
+        """description kwarg is forwarded after markdown->tracwiki conversion."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = True
+            mock_convert.return_value = "Converted body"
+
+            result = asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {
+                        "ticket_id": 13,
+                        "description": "**bold** body in markdown",
+                    },
+                )
+            )
+
+            self.assertIsInstance(result, types.CallToolResult)
+            mock_convert.assert_called_once_with(
+                "**bold** body in markdown"
+            )
+            attrs = mock_run_sync.call_args[0][3]
+            self.assertEqual(attrs["description"], "Converted body")
+
+    def test_update_workflow_action(self):
+        """action kwarg triggers a Trac workflow transition (e.g. accept)."""
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = True
+            result = asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {
+                        "ticket_id": 14,
+                        "comment": "moving to accepted",
+                        "action": "accept",
+                    },
+                )
+            )
+            self.assertIsInstance(result, types.CallToolResult)
+            attrs = mock_run_sync.call_args[0][3]
+            self.assertEqual(attrs["action"], "accept")
+
+    def test_update_workflow_action_input_field(self):
+        """action_<name>_<name>_<field> kwargs are forwarded by pattern.
+
+        Trac's workflow input convention is
+        ``action_<action>_<action>_<field>`` (e.g.
+        ``action_resolve_resolve_resolution``).  These are pattern-forwarded
+        rather than statically allowlisted because action names are
+        workflow-config-dependent.
+        """
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = True
+            result = asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {
+                        "ticket_id": 15,
+                        "action": "resolve",
+                        "action_resolve_resolve_resolution": "fixed",
+                        "action_reassign_reassign_owner": "bob",
+                    },
+                )
+            )
+            self.assertIsInstance(result, types.CallToolResult)
+            attrs = mock_run_sync.call_args[0][3]
+            self.assertEqual(attrs["action"], "resolve")
+            self.assertEqual(
+                attrs["action_resolve_resolve_resolution"], "fixed"
+            )
+            self.assertEqual(
+                attrs["action_reassign_reassign_owner"], "bob"
+            )
+
+    def test_update_unknown_kwargs_still_dropped(self):
+        """Non-allowlisted, non-action_-prefixed kwargs are silently dropped.
+
+        Locks the contract: only the documented allowlist + action_*
+        pattern reach the wire.  Random unknown keys (typos, future-proofing
+        attempts) do NOT get forwarded.
+        """
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = True
+            asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {
+                        "ticket_id": 16,
+                        "status": "accepted",
+                        "not_a_field": "should-be-dropped",
+                        "act": "should-also-be-dropped",
+                    },
+                )
+            )
+            attrs = mock_run_sync.call_args[0][3]
+            self.assertIn("status", attrs)
+            self.assertNotIn("not_a_field", attrs)
+            self.assertNotIn("act", attrs)
+
 
 # ---------------------------------------------------------------------------
 # Ticket Write Tool Dispatcher tests
