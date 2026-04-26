@@ -759,3 +759,106 @@ class TracClient:
         """
         result = self._rpc_request("ticket", "getTicketFields")
         return result
+
+    # Ticket attachment operations
+
+    def put_ticket_attachment(
+        self,
+        ticket_id: int,
+        filename: str,
+        description: str,
+        data: xmlrpc.client.Binary,
+        replace: bool = False,
+    ) -> Any:
+        """
+        Upload a file as an attachment to a ticket.
+
+        Args:
+            ticket_id: Ticket number to attach to
+            filename: Attachment filename (basename only)
+            description: Attachment description
+            data: Attachment payload wrapped in ``xmlrpc.client.Binary``
+            replace: If True, overwrite an existing attachment of the same name
+
+        Returns:
+            Server-returned identifier for the stored attachment (typically the
+            stored filename string).
+
+        Raises:
+            xmlrpc.client.Fault: If ticket not found, permissions denied
+                (requires TICKET_APPEND), or attachment exists and replace=False
+        """
+        return self._rpc_request(
+            "ticket",
+            "putAttachment",
+            ticket_id,
+            filename,
+            description,
+            data,
+            replace,
+        )
+
+    def get_ticket_attachment(
+        self, ticket_id: int, filename: str
+    ) -> bytes:
+        """
+        Download a ticket attachment as raw bytes.
+
+        Relies on ``_parse_xmlrpc_value`` decoding the XML-RPC ``<base64>``
+        payload into ``bytes``.
+
+        Args:
+            ticket_id: Ticket number the attachment belongs to
+            filename: Attachment filename
+
+        Returns:
+            Raw attachment bytes.
+
+        Raises:
+            xmlrpc.client.Fault: If ticket or attachment not found, or
+                permissions denied (requires TICKET_VIEW)
+        """
+        return self._rpc_request(
+            "ticket", "getAttachment", ticket_id, filename
+        )
+
+    def list_ticket_attachments(
+        self, ticket_id: int
+    ) -> list[Any]:
+        """
+        List attachments on a ticket.
+
+        Args:
+            ticket_id: Ticket number to list attachments for
+
+        Returns:
+            List of attachment tuples [filename, description, size, time, author]
+
+        Raises:
+            xmlrpc.client.Fault: If ticket not found or permissions denied
+                (requires TICKET_VIEW)
+        """
+        return self._rpc_request(
+            "ticket", "listAttachments", ticket_id
+        )
+
+    def delete_ticket_attachment(
+        self, ticket_id: int, filename: str
+    ) -> bool:
+        """
+        Delete a ticket attachment.
+
+        Args:
+            ticket_id: Ticket number the attachment belongs to
+            filename: Attachment filename to delete
+
+        Returns:
+            True on success.
+
+        Raises:
+            xmlrpc.client.Fault: If ticket or attachment not found, or
+                permissions denied (requires TICKET_ADMIN)
+        """
+        return self._rpc_request(
+            "ticket", "deleteAttachment", ticket_id, filename
+        )
