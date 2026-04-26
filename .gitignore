@@ -54,3 +54,8 @@ scripts/comprehensive-mcp-tool-test-*.md
 
 # PyInstaller
 *.spec
+
+# auto-pm runtime artifacts (created when auto-pm CLI runs against this repo)
+.auto-pm/snapshots.db
+.auto-pm/snapshots.db-wal
+.auto-pm/snapshots.db-shm
