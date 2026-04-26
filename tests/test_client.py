@@ -1938,3 +1938,51 @@ def test_list_methods_success(mock_post, mock_config):
     assert "wiki.getPage" in result
     payload = mock_post.call_args[1]["data"]
     assert "system.listMethods" in payload
+
+
+# ---------------------------------------------------------------------------
+# XML-RPC <base64> parsing (attachment payloads)
+# ---------------------------------------------------------------------------
+
+
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_parse_base64_value(mock_post, mock_config):
+    """_parse_xmlrpc_value decodes <base64> elements to raw bytes."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    # "Hello, World!" base64-encoded
+    mock_response.content = b"""<?xml version="1.0"?>
+<methodResponse>
+  <params>
+    <param>
+      <value><base64>SGVsbG8sIFdvcmxkIQ==</base64></value>
+    </param>
+  </params>
+</methodResponse>"""
+    mock_post.return_value = mock_response
+
+    client = TracClient(mock_config)
+    result = client._rpc_request("ticket", "getAttachment", 1, "test.txt")
+
+    assert isinstance(result, bytes)
+    assert result == b"Hello, World!"
+
+
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_parse_base64_empty(mock_post, mock_config):
+    """_parse_xmlrpc_value handles empty <base64/> element gracefully."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.content = b"""<?xml version="1.0"?>
+<methodResponse>
+  <params>
+    <param>
+      <value><base64></base64></value>
+    </param>
+  </params>
+</methodResponse>"""
+    mock_post.return_value = mock_response
+
+    client = TracClient(mock_config)
+    result = client._rpc_request("ticket", "getAttachment", 1, "empty.txt")
+    assert result == b""
