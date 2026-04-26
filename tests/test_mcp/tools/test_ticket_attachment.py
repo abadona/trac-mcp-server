@@ -71,7 +71,9 @@ class TestPut:
         assert replace_arg is False
 
         assert result.structuredContent["ticket_id"] == 42
-        assert result.structuredContent["filename"] == "report.bin"
+        assert result.structuredContent["requested_filename"] == "report.bin"
+        assert result.structuredContent["attached_filename"] == "report.bin"
+        assert result.structuredContent["renamed_on_collision"] is False
         assert result.structuredContent["bytes_uploaded"] == len(payload)
         assert result.structuredContent["replace"] is False
 
@@ -116,6 +118,39 @@ class TestPut:
 
         call_args = client.put_ticket_attachment.call_args
         assert call_args[0][4] is True
+
+    async def test_put_rename_on_collision(self, tmp_path):
+        """When Trac renames the file (replace=False, name clash), surface
+        BOTH requested + stored names and set renamed_on_collision=True.
+
+        Mirrors RESEARCH Pitfall 5: callers MUST be able to detect that the
+        attachment was stored under a different name than they asked for.
+        """
+        attachment_file = tmp_path / "report.bin"
+        attachment_file.write_bytes(b"x")
+
+        client = _make_client()
+        # Server returns a renamed filename to avoid collision with an
+        # existing attachment of the same name.
+        client.put_ticket_attachment.return_value = "report.2.bin"
+
+        result = await handle_ticket_attachment_tool(
+            "ticket_attachment_put",
+            {
+                "ticket_id": 7,
+                "file_path": str(attachment_file),
+                "filename": "report.bin",
+                "replace": False,
+            },
+            client,
+        )
+
+        assert isinstance(result, types.CallToolResult)
+        assert result.isError is None or result.isError is False
+        assert result.structuredContent["requested_filename"] == "report.bin"
+        assert result.structuredContent["attached_filename"] == "report.2.bin"
+        assert result.structuredContent["renamed_on_collision"] is True
+        assert result.structuredContent["replace"] is False
 
     async def test_put_missing_ticket_id(self, tmp_path):
         attachment_file = tmp_path / "x.txt"

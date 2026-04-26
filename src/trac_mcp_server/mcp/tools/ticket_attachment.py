@@ -267,6 +267,8 @@ async def _handle_put(
     stored_name = stored if isinstance(stored, str) else filename
     bytes_uploaded = len(data)
 
+    renamed_on_collision = stored_name != filename
+
     text = (
         f"Uploaded attachment '{stored_name}' to ticket #{ticket_id} "
         f"({bytes_uploaded} bytes, replace={replace})"
@@ -274,7 +276,9 @@ async def _handle_put(
 
     structured = {
         "ticket_id": ticket_id,
-        "filename": stored_name,
+        "requested_filename": filename,
+        "attached_filename": stored_name,
+        "renamed_on_collision": renamed_on_collision,
         "file_path": str(file_path),
         "bytes_uploaded": bytes_uploaded,
         "replace": replace,
