@@ -20,6 +20,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - `severity` parameter now supported on `ticket_create` and `ticket_update` (previously accepted but dropped)
 - `ticket_update` now forwards `summary`, `description` (with Markdown→TracWiki conversion), and `type` ticket attributes (previously accepted but dropped)
 - `ticket_update` now forwards Trac workflow actions: `action` (e.g. `accept`, `resolve`, `reopen`) plus `action_<action>_<action>_<field>` workflow input fields (e.g. `action_resolve_resolve_resolution`). Pattern-based forwarding for `action_*` keys, since action names are workflow-config-dependent. Enables clients (e.g. auto-pm) to drive Trac workflow transitions through the MCP `ticket_update` tool instead of being silently dropped
+- `core/client` now parses XML-RPC `<base64>` values, decoding them to Python `bytes` instead of dropping or mishandling them (#12)
 
 ### Changed
 - Modernized typing across all source files to Python 3.10+ style (`X | None` instead of `Optional[X]`, built-in generics)
