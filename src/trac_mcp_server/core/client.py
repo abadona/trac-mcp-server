@@ -1,3 +1,4 @@
+import base64
 import threading
 import xmlrpc.client
 from typing import Any
@@ -115,6 +116,12 @@ class TracClient:
                 return data_value
             case "double":
                 return float(data_value)
+            case "base64":
+                # XML-RPC <base64> wraps binary attachment payloads.
+                # data_value is the base64-encoded string from ElementTree;
+                # b64decode accepts str directly and returns raw bytes.
+                # Empty Binary (<base64/>) -> "" -> b"" (graceful zero-length).
+                return base64.b64decode(data_value or "")
             case _:
                 return data_value
 
