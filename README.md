@@ -74,7 +74,7 @@ claude mcp add trac -e TRAC_URL=https://trac.example.com \
 
 Any MCP client that supports stdio transport can launch `trac-mcp-server` as a subprocess. Pass Trac credentials via environment variables.
 
-## Available Tools (31)
+## Available Tools (35)
 
 ### Tickets (11)
 | Tool | Description |
@@ -130,6 +130,14 @@ Any MCP client that supports stdio transport can launch `trac-mcp-server` as a s
 | `ticket_attachment_get` | Download a ticket attachment to a local file (bytes written to output_path, not inlined) |
 | `ticket_attachment_list` | List attachments on a ticket |
 | `ticket_attachment_delete` | Delete a ticket attachment (requires TICKET_ADMIN) |
+
+### Wiki Attachments (4)
+| Tool | Description |
+|------|-------------|
+| `wiki_attachment_put` | Upload a local file as an attachment to a wiki page (bytes sent via XML-RPC, not inlined) |
+| `wiki_attachment_get` | Download a wiki attachment to a local file (bytes written to output_path, not inlined) |
+| `wiki_attachment_list` | List attachments on a wiki page |
+| `wiki_attachment_delete` | Delete a wiki attachment (requires WIKI_DELETE) |
 
 ## Development
 

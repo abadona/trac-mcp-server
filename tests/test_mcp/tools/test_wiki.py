@@ -83,9 +83,9 @@ class TestCursorEncoding(unittest.TestCase):
 class TestWikiTools(unittest.TestCase):
     """Test WIKI_TOOLS definitions."""
 
-    def test_five_tools_defined(self):
-        """Test WIKI_TOOLS contains exactly 6 tools."""
-        self.assertEqual(len(WIKI_TOOLS), 6)
+    def test_ten_tools_defined(self):
+        """Test WIKI_TOOLS contains exactly 10 tools."""
+        self.assertEqual(len(WIKI_TOOLS), 10)
 
     def test_tool_names(self):
         """Test tool names are correct."""

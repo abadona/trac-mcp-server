@@ -592,6 +592,113 @@ class TracClient:
         result = self._rpc_request("wiki", "deletePage", page_name)
         return result
 
+    # Wiki attachment operations
+
+    def put_wiki_attachment(
+        self,
+        page_name: str,
+        filename: str,
+        description: str,
+        data: xmlrpc.client.Binary,
+        replace: bool = False,
+    ) -> str:
+        """
+        Upload a file as an attachment to a wiki page.
+
+        Wraps ``wiki.putAttachmentEx``, NOT the bare ``wiki.putAttachment``:
+        the ``Ex`` variant accepts both a description and a replace flag,
+        while the bare form drops the description and forces replace=True.
+
+        The XML-RPC signature is
+        ``putAttachmentEx(pagename, filename, description, data, replace)``
+        (note: data BEFORE replace, separate pagename + filename — NOT a
+        single ``"page/file"`` path like the bare ``putAttachment``).
+
+        Args:
+            page_name: Wiki page name. The target wiki page must already
+                exist or Trac will raise ``ResourceNotFound``.
+            filename: Attachment filename (basename only).
+            description: Attachment description.
+            data: Attachment payload wrapped in ``xmlrpc.client.Binary``.
+            replace: If True, overwrite an existing attachment with the
+                same name; if False and a collision occurs, Trac will
+                rename the new attachment and return the new filename.
+
+        Returns:
+            Server-returned filename of the stored attachment (typically
+            ``filename``; may differ on collision when replace=False).
+
+        Raises:
+            xmlrpc.client.Fault: If wiki page does not exist
+                (ResourceNotFound), or permissions denied
+                (requires WIKI_MODIFY).
+        """
+        return self._rpc_request(
+            "wiki",
+            "putAttachmentEx",
+            page_name,
+            filename,
+            description,
+            data,
+            replace,
+        )
+
+    def get_wiki_attachment(self, page_path: str) -> bytes:
+        """
+        Download a wiki attachment as raw bytes.
+
+        Relies on ``_parse_xmlrpc_value`` decoding the XML-RPC ``<base64>``
+        payload into ``bytes``.
+
+        Args:
+            page_path: Attachment path of the form ``"PageName/filename"``.
+
+        Returns:
+            Raw attachment bytes.
+
+        Raises:
+            xmlrpc.client.Fault: If wiki page or attachment not found,
+                or permissions denied (requires WIKI_VIEW).
+        """
+        return self._rpc_request("wiki", "getAttachment", page_path)
+
+    def list_wiki_attachments(self, page_name: str) -> list[str]:
+        """
+        List attachments on a wiki page.
+
+        Note: ``wiki.listAttachments`` returns a flat ``list[str]`` of
+        ``"PageName/filename"`` paths — NOT a list of ``(filename,
+        description, size, time, author)`` tuples like the ticket
+        equivalent. This asymmetry is preserved here intentionally.
+
+        Args:
+            page_name: Wiki page name to list attachments for.
+
+        Returns:
+            List of ``"PageName/filename"`` path strings.
+
+        Raises:
+            xmlrpc.client.Fault: If wiki page not found or permissions
+                denied (requires WIKI_VIEW).
+        """
+        return self._rpc_request("wiki", "listAttachments", page_name)
+
+    def delete_wiki_attachment(self, page_path: str) -> bool:
+        """
+        Delete a wiki attachment.
+
+        Args:
+            page_path: Attachment path of the form ``"PageName/filename"``.
+
+        Returns:
+            True on success.
+
+        Raises:
+            xmlrpc.client.Fault: If page or attachment not found, or
+                permissions denied (requires WIKI_DELETE).
+        """
+        return self._rpc_request("wiki", "deleteAttachment", page_path)
+
     def get_recent_wiki_changes(
         self, since_timestamp: int = 0
     ) -> list[dict[str, Any]]:

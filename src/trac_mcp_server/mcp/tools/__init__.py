@@ -14,6 +14,10 @@ from .ticket_attachment import (
 from .ticket_batch import TICKET_BATCH_TOOLS, handle_ticket_batch_tool
 from .ticket_read import TICKET_READ_TOOLS, handle_ticket_read_tool
 from .ticket_write import TICKET_WRITE_TOOLS, handle_ticket_write_tool
+from .wiki_attachment import (
+    WIKI_ATTACHMENT_TOOLS,
+    handle_wiki_attachment_tool,
+)
 from .wiki_file import WIKI_FILE_TOOLS, handle_wiki_file_tool
 from .wiki_read import WIKI_READ_TOOLS, handle_wiki_read_tool
 from .wiki_write import WIKI_WRITE_TOOLS, handle_wiki_write_tool
@@ -25,7 +29,7 @@ TICKET_TOOLS = (
     + TICKET_BATCH_TOOLS
     + TICKET_ATTACHMENT_TOOLS
 )
-WIKI_TOOLS = WIKI_READ_TOOLS + WIKI_WRITE_TOOLS
+WIKI_TOOLS = WIKI_READ_TOOLS + WIKI_WRITE_TOOLS + WIKI_ATTACHMENT_TOOLS
 
 __all__ = [
     "build_error_response",
@@ -41,8 +45,10 @@ __all__ = [
     "WIKI_TOOLS",
     "WIKI_READ_TOOLS",
     "WIKI_WRITE_TOOLS",
+    "WIKI_ATTACHMENT_TOOLS",
     "handle_wiki_read_tool",
     "handle_wiki_write_tool",
+    "handle_wiki_attachment_tool",
     "WIKI_FILE_TOOLS",
     "handle_wiki_file_tool",
     "MILESTONE_TOOLS",
