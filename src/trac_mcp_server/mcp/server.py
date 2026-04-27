@@ -33,6 +33,7 @@ from .resources.wiki import (
 from .tools import (
     TICKET_TOOLS,
     WIKI_TOOLS,
+    handle_ticket_attachment_tool,
     handle_ticket_batch_tool,
     handle_ticket_read_tool,
     handle_ticket_write_tool,
@@ -187,6 +188,14 @@ async def handle_call_tool(
                 ],
                 isError=True,
             )
+
+    elif name.startswith("ticket_attachment_"):
+        # Order matters: must be matched before generic ticket_* dispatch
+        # below — otherwise ticket_attachment_put would fall into the
+        # write handler and fail with "Unknown ticket write tool".
+        return await handle_ticket_attachment_tool(
+            name, arguments, client
+        )
 
     elif name.startswith("ticket_"):
         # Route to read, batch, or write handler based on tool name
