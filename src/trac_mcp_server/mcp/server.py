@@ -37,6 +37,7 @@ from .tools import (
     handle_ticket_batch_tool,
     handle_ticket_read_tool,
     handle_ticket_write_tool,
+    handle_wiki_attachment_tool,
     handle_wiki_read_tool,
     handle_wiki_write_tool,
 )
@@ -217,6 +218,15 @@ async def handle_call_tool(
             return await handle_ticket_write_tool(
                 name, arguments, client
             )
+
+    elif name.startswith("wiki_attachment_"):
+        # Order matters (Pattern 40-D, specific-before-generic): must
+        # be matched BEFORE wiki_file_ and the generic wiki_ branches —
+        # "wiki_attachment_xxx" also matches "wiki_file_"-style and
+        # "wiki_"-style prefixes when checked in the wrong order.
+        return await handle_wiki_attachment_tool(
+            name, arguments, client
+        )
 
     elif name.startswith("wiki_file_"):
         return await handle_wiki_file_tool(name, arguments, client)
