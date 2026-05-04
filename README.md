@@ -26,6 +26,8 @@ Run the server:
 trac-mcp-server
 ```
 
+> **Using auto-pm?** When trac-mcp-server is driven through auto-pm, auto-pm reads its connection settings from `.auto_pm/config.yml` in your project root (rather than the environment variables above). Run `auto-pm setup` in your project directory to generate the file; the resulting `.auto_pm/config.yml` carries `trac.url`, `trac.username`, a `${TRAC_PASSWORD}` reference, and component mappings.
+
 ## Configuration
 
 All configuration is via environment variables (or a `.env` file in the working directory):
