@@ -8,6 +8,36 @@ import mistune
 from .common import ConversionResult, markdown_to_tracwiki_lang
 
 
+# GitHub-style heading slug, mirrored from auto-pm's docs_linkcheck rule
+# (lowercase, whitespace runs → single dash, drop everything that isn't
+# alphanumeric / dash / underscore). Inline TracWiki markers produced by
+# the renderer pipeline (`backticks`, `'''bold'''`, `''italic''`) are
+# stripped before the rule runs so the slug derives from the *visible*
+# heading text, not its render-side decoration.
+_SLUG_DROP_RE = re.compile(r"[^\w\- ]+")
+_SLUG_WS_RE = re.compile(r"\s+")
+
+
+def _heading_slug(rendered_text: str) -> str:
+    """Return the GitHub-style anchor slug for a rendered heading text.
+
+    Used by :meth:`TracWikiRenderer.heading` to emit an explicit Trac
+    heading anchor (``== Heading == #heading``) so cross-page links
+    written as Markdown ``[text](#heading)`` resolve after conversion.
+    Without this, Trac auto-generates a heading id by stripping
+    whitespace + non-alphanumerics WITHOUT lowercasing — ``#Heading``
+    or ``#WikiTaskIndexPageSchema`` — which never matches the
+    Markdown source's ``#heading`` / ``#wiki-task-index-page-schema``.
+    """
+    cleaned = rendered_text
+    # Strip TracWiki inline markers our own renderer emits before us.
+    cleaned = cleaned.replace("'''", "").replace("''", "").replace("`", "")
+    cleaned = _SLUG_DROP_RE.sub("", cleaned)
+    cleaned = cleaned.strip().lower()
+    cleaned = _SLUG_WS_RE.sub("-", cleaned)
+    return cleaned
+
+
 class TracWikiRenderer(mistune.BaseRenderer):
     """Renderer that converts Markdown AST to TracWiki syntax."""
 
@@ -51,11 +81,23 @@ class TracWikiRenderer(mistune.BaseRenderer):
         """Render heading.
 
         TracWiki heading syntax uses leading = markers (trailing = optional).
-        We produce the canonical form with trailing markers for readability:
-        = H1 =
-        == H2 ==
+        We produce the canonical form with trailing markers AND an explicit
+        anchor (``#slug``) so Markdown-source cross-references like
+        ``[text](#some-heading)`` resolve after conversion. Trac's default
+        heading id (whitespace + punctuation stripped, case preserved) does
+        NOT match the Markdown slug rule (lowercase + whitespace→dash);
+        emitting an explicit anchor makes the Markdown slug authoritative.
+
+            = H1 = #h1
+            == H2 == #h2
+
+        If the heading text slugifies to empty (e.g. punctuation-only),
+        the explicit anchor is omitted and Trac's default id applies.
         """
         marker = "=" * level
+        slug = _heading_slug(text)
+        if slug:
+            return f"{marker} {text} {marker} #{slug}\n"
         return f"{marker} {text} {marker}\n"
 
     def paragraph(self, text: str) -> str:

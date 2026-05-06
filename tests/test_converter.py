@@ -21,24 +21,30 @@ class TestTracWikiConverter(unittest.TestCase):
     """Test Markdown to TracWiki conversion."""
 
     def test_heading_level_1(self):
-        """Test H1 heading conversion."""
+        """Test H1 heading conversion.
+
+        Headings emit an explicit Markdown-style anchor so that
+        ``[text](#heading-1)`` cross-references in the source resolve
+        after conversion (Trac's auto-generated id strips spaces but
+        does NOT lowercase).
+        """
         result = markdown_to_tracwiki("# Heading 1")
-        self.assertEqual(result, "= Heading 1 =")
+        self.assertEqual(result, "= Heading 1 = #heading-1")
 
     def test_heading_level_2(self):
         """Test H2 heading conversion."""
         result = markdown_to_tracwiki("## Heading 2")
-        self.assertEqual(result, "== Heading 2 ==")
+        self.assertEqual(result, "== Heading 2 == #heading-2")
 
     def test_heading_level_3(self):
         """Test H3 heading conversion."""
         result = markdown_to_tracwiki("### Heading 3")
-        self.assertEqual(result, "=== Heading 3 ===")
+        self.assertEqual(result, "=== Heading 3 === #heading-3")
 
     def test_heading_level_4(self):
         """Test H4 heading conversion."""
         result = markdown_to_tracwiki("#### Heading 4")
-        self.assertEqual(result, "==== Heading 4 ====")
+        self.assertEqual(result, "==== Heading 4 ==== #heading-4")
 
     def test_bold_text(self):
         """Test bold text conversion."""
@@ -323,7 +329,7 @@ Second paragraph."""
         """Test conversion without warnings."""
         result = convert_with_warnings("# Simple heading")
         self.assertIsInstance(result, ConversionResult)
-        self.assertEqual(result.tracwiki, "= Simple heading =")
+        self.assertEqual(result.tracwiki, "= Simple heading = #simple-heading")
         self.assertEqual(len(result.warnings), 0)
 
     def test_convert_with_warnings_table_converted(self):
@@ -1358,6 +1364,111 @@ class TestAutoConvert(unittest.TestCase):
         )
         self.assertEqual(result.source_format, "markdown")
         self.assertIn("= Real Markdown Heading =", result.text)
+
+
+class TestHeadingExplicitAnchor(unittest.TestCase):
+    """Tests for the explicit-anchor emission in heading conversion.
+
+    Regression: Markdown source links using GitHub-style slugs
+    (``[Surfaces](#surfaces)``) did not resolve after conversion
+    because Trac's auto-generated heading id strips whitespace +
+    punctuation but DOES NOT lowercase. The converter now emits
+    an explicit Markdown-style slug as the heading's TracWiki
+    anchor (``== Surfaces == #surfaces``).
+    """
+
+    def test_simple_heading_emits_lowercase_slug(self):
+        """Single-word heading emits a lowercase slug anchor."""
+        self.assertEqual(
+            markdown_to_tracwiki("## Surfaces"),
+            "== Surfaces == #surfaces",
+        )
+
+    def test_multi_word_heading_uses_dash_separator(self):
+        """Whitespace runs collapse to a single dash."""
+        self.assertEqual(
+            markdown_to_tracwiki("## Wiki task index page schema"),
+            "== Wiki task index page schema == #wiki-task-index-page-schema",
+        )
+
+    def test_heading_strips_inline_code_from_slug(self):
+        r"""Inline code (``\`backticks\``) is stripped from the slug
+        but preserved in the visible heading text.
+        """
+        self.assertEqual(
+            markdown_to_tracwiki("## EvalRef marker fields (`ticket-comment`)"),
+            "== EvalRef marker fields (`ticket-comment`) == "
+            "#evalref-marker-fields-ticket-comment",
+        )
+
+    def test_heading_drops_em_dash_and_punctuation_from_slug(self):
+        """Em-dash, commas, and parens drop out of the slug.
+
+        Mirrors the source pattern in eval-payload-spec.md:
+        ``### Example 1 — Initial round, judge picks one model``.
+        """
+        result = markdown_to_tracwiki(
+            "### Example 1 — Initial round, judge picks one model"
+        )
+        # Em-dash + comma drop; whitespace runs (incl. the gap left by the
+        # dropped em-dash) collapse to single dashes.
+        self.assertIn(
+            "#example-1-initial-round-judge-picks-one-model",
+            result,
+        )
+
+    def test_heading_preserves_underscore_in_slug(self):
+        """Underscores in identifiers are part of the slug."""
+        self.assertEqual(
+            markdown_to_tracwiki("## cheapest_adequate field"),
+            "== cheapest_adequate field == #cheapest_adequate-field",
+        )
+
+    def test_heading_with_inline_bold_strips_markers_from_slug(self):
+        """``## **bold** heading`` slug drops the bold markers."""
+        self.assertEqual(
+            markdown_to_tracwiki("## **bold** heading"),
+            "== '''bold''' heading == #bold-heading",
+        )
+
+    def test_anchor_link_resolves_to_emitted_heading_slug(self):
+        """End-to-end: a Markdown anchor link's slug matches the slug
+        the converter emits for the corresponding heading.
+        """
+        source = (
+            "## Field reference\n"
+            "\n"
+            "See [Field reference](#field-reference) above.\n"
+        )
+        result = markdown_to_tracwiki(source)
+        self.assertIn("== Field reference == #field-reference", result)
+        self.assertIn("[#field-reference Field reference]", result)
+
+    def test_heading_roundtrip_strips_anchor(self):
+        """``== Heading == #anchor`` round-trips back to ``## Heading``
+        (the explicit anchor is implicit on the Markdown side).
+        """
+        from trac_mcp_server.converters.tracwiki_to_markdown import (
+            tracwiki_to_markdown,
+        )
+
+        markdown_source = "## Wiki task index page schema"
+        tracwiki_form = markdown_to_tracwiki(markdown_source)
+        self.assertEqual(
+            tracwiki_form,
+            "== Wiki task index page schema == #wiki-task-index-page-schema",
+        )
+        roundtripped = tracwiki_to_markdown(tracwiki_form).text.strip()
+        self.assertEqual(roundtripped, "## Wiki task index page schema")
+
+    def test_heading_with_no_alphanumerics_omits_anchor(self):
+        """Punctuation-only heading text emits NO explicit anchor —
+        Trac's default id handling applies.
+        """
+        # ``# ---`` would lex as a thematic break before reaching the
+        # heading rule; use punctuation that survives parsing.
+        result = markdown_to_tracwiki("## ...")
+        self.assertNotIn("#", result.replace("== ... ==", ""))
 
 
 class TestDetectFormatHeuristicFenceAware(unittest.TestCase):

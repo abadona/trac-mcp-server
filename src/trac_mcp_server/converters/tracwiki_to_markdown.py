@@ -187,13 +187,17 @@ class TracWikiParser:
     def _convert_headings(self, text: str) -> str:
         """Convert headings: = H1 = -> # H1.
 
-        Handle headings with or without trailing equals (trailing = is optional in TracWiki).
+        Handle headings with or without trailing equals (trailing = is
+        optional in TracWiki). Also strip an explicit-anchor suffix
+        (``== Heading == #anchor``) — the Markdown roundtrip target uses
+        slug-derived implicit anchors, so the explicit anchor token is
+        load-bearing on TracWiki side only.
         """
         # Process from H6 to H1 to avoid conflicts
         for level in range(6, 0, -1):
             marker = "=" * level
             text = re.sub(
-                rf"^{re.escape(marker)}\s+(.*?)(?:\s+{re.escape(marker)})?\s*$",
+                rf"^{re.escape(marker)}\s+(.*?)(?:\s+{re.escape(marker)})?(?:\s+#\S+)?\s*$",
                 r"%s \1" % ("#" * level),
                 text,
                 flags=re.MULTILINE,
