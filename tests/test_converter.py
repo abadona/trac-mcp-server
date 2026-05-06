@@ -1315,6 +1315,145 @@ class TestAutoConvert(unittest.TestCase):
         self.assertIsInstance(result.converted, bool)
         self.assertIsInstance(result.warnings, list)
 
+    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
+    def test_explicit_source_format_overrides_heuristic(self, _mock_caps):
+        """Caller-supplied source_format MUST be honored even when heuristic
+        would disagree.
+
+        Regression: a Markdown spec doc that contains a TracWiki-style
+        heading inside a fenced code example (e.g. eval-payload-spec.md
+        showing ``= Evals: AuditDocs =`` as a documented output) used to
+        get classified as TracWiki by the heuristic, causing pass-through
+        and storing raw Markdown on the wiki. The caller (wiki_file_push
+        with explicit ``format=markdown``) already knows the source
+        format and MUST be able to bypass detection.
+        """
+        from trac_mcp_server.converters.common import auto_convert
+
+        markdown_with_bait = (
+            "# Real Markdown Heading\n"
+            "\n"
+            "This document is Markdown but documents TracWiki syntax:\n"
+            "\n"
+            "```\n"
+            "= Pretend TracWiki Heading =\n"
+            "== Subheading ==\n"
+            "```\n"
+            "\n"
+            "Back to Markdown prose.\n"
+        )
+        mock_config = MagicMock()
+        result = self._run(
+            auto_convert(
+                markdown_with_bait,
+                mock_config,
+                target_format="tracwiki",
+                source_format="markdown",
+            )
+        )
+        self.assertTrue(
+            result.converted,
+            f"Conversion was skipped despite explicit source_format='markdown'. "
+            f"Stored text:\n{result.text}",
+        )
+        self.assertEqual(result.source_format, "markdown")
+        self.assertIn("= Real Markdown Heading =", result.text)
+
+
+class TestDetectFormatHeuristicFenceAware(unittest.TestCase):
+    """Tests for detect_format_heuristic() — fence redaction + line-anchored heading match.
+
+    Regression: a Markdown source that embeds TracWiki examples in fenced
+    code blocks must still be classified as Markdown. The previous
+    heuristic used an unanchored regex over the full text and matched
+    inside fences, inverting the verdict on bait-laden inputs.
+    """
+
+    def test_markdown_with_tracwiki_example_in_fence_is_markdown(self):
+        from trac_mcp_server.converters.common import detect_format_heuristic
+
+        text = (
+            "# Markdown Heading\n"
+            "\n"
+            "Here is a TracWiki example block:\n"
+            "\n"
+            "```\n"
+            "= TracWiki Heading inside fence =\n"
+            "```\n"
+            "\n"
+            "Followed by more **markdown** prose.\n"
+        )
+        self.assertEqual(detect_format_heuristic(text), "markdown")
+
+    def test_tracwiki_with_markdown_example_in_fence_is_tracwiki(self):
+        from trac_mcp_server.converters.common import detect_format_heuristic
+
+        text = (
+            "= TracWiki Heading =\n"
+            "\n"
+            "Here is a Markdown example block:\n"
+            "\n"
+            "{{{\n"
+            "# Markdown heading inside fence\n"
+            "}}}\n"
+            "\n"
+            "Followed by more '''tracwiki''' prose.\n"
+        )
+        self.assertEqual(detect_format_heuristic(text), "tracwiki")
+
+    def test_inline_equals_in_prose_is_not_a_tracwiki_heading(self):
+        """``key = value = result`` inline prose must not be mistaken for
+        a TracWiki heading. The fixed regex anchors to line start AND end.
+        """
+        from trac_mcp_server.converters.common import detect_format_heuristic
+
+        text = (
+            "# Markdown Heading\n"
+            "\n"
+            "Configuration syntax: ``foo = bar = baz`` and ``a=1, b=2``.\n"
+            "\n"
+            "More markdown prose.\n"
+        )
+        self.assertEqual(detect_format_heuristic(text), "markdown")
+
+    def test_clean_tracwiki_still_detected(self):
+        from trac_mcp_server.converters.common import detect_format_heuristic
+
+        text = "= H1 =\n\n== H2 ==\n\nBody with '''bold'''.\n"
+        self.assertEqual(detect_format_heuristic(text), "tracwiki")
+
+    def test_clean_markdown_still_detected(self):
+        from trac_mcp_server.converters.common import detect_format_heuristic
+
+        text = "# H1\n\n## H2\n\nBody with **bold**.\n"
+        self.assertEqual(detect_format_heuristic(text), "markdown")
+
+    def test_eval_payload_spec_real_world_pattern(self):
+        """End-to-end: the exact pattern that caused the production
+        regression on docs/reference/eval-payload-spec.md — Markdown
+        spec containing TracWiki output examples in fenced blocks.
+        """
+        from trac_mcp_server.converters.common import detect_format_heuristic
+
+        text = (
+            "# Eval Payload Spec\n"
+            "\n"
+            "This document specifies the wire format.\n"
+            "\n"
+            "```\n"
+            "= Evals: AuditDocs =\n"
+            "\n"
+            "== Frontier ==\n"
+            "\n"
+            "|| Model || Score ||\n"
+            "```\n"
+            "\n"
+            "## Field reference\n"
+            "\n"
+            "Each field maps to a column in evals/schema.py.\n"
+        )
+        self.assertEqual(detect_format_heuristic(text), "markdown")
+
 
 if __name__ == "__main__":
     unittest.main()

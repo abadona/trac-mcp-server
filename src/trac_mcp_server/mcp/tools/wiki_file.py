@@ -240,7 +240,10 @@ async def _handle_push(
     converted = False
     if source_format == "markdown":
         conversion = await auto_convert(
-            content, client.config, target_format="tracwiki"
+            content,
+            client.config,
+            target_format="tracwiki",
+            source_format="markdown",
         )
         wiki_content = conversion.text
         converted = conversion.converted

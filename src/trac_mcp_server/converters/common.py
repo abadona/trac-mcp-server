@@ -172,6 +172,46 @@ class ConversionResult:
         return self.text
 
 
+def _strip_code_fences(text: str) -> str:
+    """Return ``text`` with content inside fenced code blocks redacted.
+
+    Markdown ``` … ``` and TracWiki {{{ … }}} blocks both shadow heading
+    syntax in the surrounding prose — a doc that documents one format by
+    showing examples of the OTHER must not have its detection inverted by
+    those examples. Replaces fence interiors with empty lines so line
+    numbering / regex anchors elsewhere remain stable.
+    """
+    out: list[str] = []
+    in_md_fence = False
+    in_tw_fence_depth = 0
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not in_md_fence and in_tw_fence_depth == 0:
+            if stripped.startswith("```"):
+                in_md_fence = True
+                out.append("")
+                continue
+            if stripped.startswith("{{{"):
+                in_tw_fence_depth = 1 + stripped.count("{{{") - 1
+                out.append("")
+                continue
+            out.append(line)
+            continue
+        if in_md_fence:
+            if stripped.startswith("```"):
+                in_md_fence = False
+            out.append("")
+            continue
+        if in_tw_fence_depth > 0:
+            in_tw_fence_depth += stripped.count("{{{")
+            in_tw_fence_depth -= stripped.count("}}}")
+            if in_tw_fence_depth < 0:
+                in_tw_fence_depth = 0
+            out.append("")
+            continue
+    return "\n".join(out)
+
+
 def detect_format_heuristic(text: str) -> str:
     """Heuristic format detection (fallback when capabilities unavailable).
 
@@ -180,19 +220,28 @@ def detect_format_heuristic(text: str) -> str:
     2. Score ambiguous markers (count syntax elements)
     3. Default to 'tracwiki' if unclear
 
+    Code-fenced content is redacted before scanning so a Markdown doc that
+    embeds TracWiki examples (or vice-versa) is not misclassified by its
+    own examples. Heading-based detection is also anchored to line start —
+    the previous unanchored regex matched ``key = value = result`` style
+    prose and inverted the verdict on otherwise-clean Markdown.
+
     Returns 'markdown' or 'tracwiki'.
     """
+    scan_text = _strip_code_fences(text)
+
     # Check for unambiguous TracWiki markers
-    # Heading with trailing equals: = H1 = or == H2 ==
-    if re.search(r"={1,6}\s+.+?\s+={1,6}", text, re.MULTILINE):
+    # Heading with trailing equals at LINE START: = H1 = or == H2 ==
+    if re.search(r"^={1,6}\s+.+?\s+={1,6}\s*$", scan_text, re.MULTILINE):
         return "tracwiki"
 
     # Check for unambiguous Markdown markers
     # Heading without trailing equals: # H1 or ## H2
-    if re.search(r"^#{1,6}\s+[^=]", text, re.MULTILINE):
+    if re.search(r"^#{1,6}\s+[^=]", scan_text, re.MULTILINE):
         return "markdown"
 
-    # Score ambiguous markers
+    # Score ambiguous markers (use original text — fence delimiters
+    # themselves are signal, even when interiors are redacted).
     md_score = (
         text.count("**")  # Markdown bold
         + text.count("```")  # Markdown code fence
@@ -209,7 +258,10 @@ def detect_format_heuristic(text: str) -> str:
 
 
 async def auto_convert(
-    text: str, config, target_format: str | None = None
+    text: str,
+    config,
+    target_format: str | None = None,
+    source_format: str | None = None,
 ) -> ConversionResult:
     """Automatically convert text based on server capabilities and source format.
 
@@ -218,10 +270,16 @@ async def auto_convert(
     - If server has markdown processor: prefer Markdown
     - If server has no markdown processor: use TracWiki
 
+    If source_format is specified, the heuristic is skipped and the caller's
+    declared format is honored. Callers that already know the source format
+    (e.g. wiki_file_push handler with explicit ``format=`` arg) MUST pass it
+    through so re-detection cannot invert the verdict on bait-laden inputs.
+
     Args:
         text: Text to convert
         config: Config with Trac server URL/credentials
         target_format: Optional 'markdown' or 'tracwiki' (None = auto-detect from server)
+        source_format: Optional 'markdown' or 'tracwiki' (None = run heuristic)
 
     Returns:
         ConversionResult with converted text and metadata
@@ -247,8 +305,9 @@ async def auto_convert(
             # Capabilities detection failed, default to TracWiki
             target_format = "tracwiki"
 
-    # Detect source format
-    source_format = detect_format_heuristic(text)
+    # Honor caller-supplied source_format; only re-detect when caller doesn't know.
+    if source_format is None:
+        source_format = detect_format_heuristic(text)
 
     # Convert if formats differ
     if source_format == target_format:
