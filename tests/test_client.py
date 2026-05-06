@@ -1964,7 +1964,9 @@ def test_parse_base64_value(mock_post, mock_config):
     mock_post.return_value = mock_response
 
     client = TracClient(mock_config)
-    result = client._rpc_request("ticket", "getAttachment", 1, "test.txt")
+    result = client._rpc_request(
+        "ticket", "getAttachment", 1, "test.txt"
+    )
 
     assert isinstance(result, bytes)
     assert result == b"Hello, World!"
@@ -1986,7 +1988,9 @@ def test_parse_base64_empty(mock_post, mock_config):
     mock_post.return_value = mock_response
 
     client = TracClient(mock_config)
-    result = client._rpc_request("ticket", "getAttachment", 1, "empty.txt")
+    result = client._rpc_request(
+        "ticket", "getAttachment", 1, "empty.txt"
+    )
     assert result == b""
 
 
