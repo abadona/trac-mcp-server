@@ -39,9 +39,7 @@ class TracConfig(BaseModel):
     can supply them at runtime instead.
     """
 
-    url: str | None = Field(
-        default=None, description="Trac server URL"
-    )
+    url: str | None = Field(default=None, description="Trac server URL")
     username: str | None = Field(
         default=None, description="Trac username"
     )
@@ -56,8 +54,8 @@ class TracConfig(BaseModel):
     max_parallel_requests: int = Field(
         default=5,
         ge=1,
-        le=10,
-        description="Maximum concurrent requests to Trac instance (1-10)",
+        le=100,
+        description="Maximum concurrent requests to Trac instance (1-100)",
     )
     max_batch_size: int = Field(
         default=500,
@@ -78,9 +76,7 @@ class LoggingConfig(BaseModel):
     """
 
     level: str = Field(default="INFO", description="Log level")
-    file: str | None = Field(
-        default=None, description="Log file path"
-    )
+    file: str | None = Field(default=None, description="Log file path")
 
     model_config = {"frozen": True}
 

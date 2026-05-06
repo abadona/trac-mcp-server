@@ -28,7 +28,8 @@ import mcp.types as types
 from ...core.async_utils import run_sync
 from ...core.client import TracClient
 from ...file_handler import validate_file_path, validate_output_path
-from .errors import build_error_response, translate_xmlrpc_error
+from .errors import build_error_response
+from .registry import ToolSpec
 
 logger = logging.getLogger(__name__)
 
@@ -200,57 +201,8 @@ WIKI_ATTACHMENT_TOOLS = [
 ]
 
 
-async def handle_wiki_attachment_tool(
-    name: str,
-    arguments: dict | None,
-    client: TracClient,
-) -> types.CallToolResult:
-    """Handle wiki attachment tool execution.
-
-    Args:
-        name: Tool name (wiki_attachment_put, wiki_attachment_get,
-            wiki_attachment_list, wiki_attachment_delete)
-        arguments: Tool arguments (dict or None)
-        client: Pre-configured TracClient instance
-
-    Returns:
-        CallToolResult with text content and optional structured content,
-        or CallToolResult with isError=True for errors.
-    """
-    args = arguments or {}
-
-    try:
-        if name == "wiki_attachment_put":
-            return await _handle_put(args, client)
-        elif name == "wiki_attachment_get":
-            return await _handle_get(args, client)
-        elif name == "wiki_attachment_list":
-            return await _handle_list(args, client)
-        elif name == "wiki_attachment_delete":
-            return await _handle_delete(args, client)
-        else:
-            raise ValueError(
-                f"Unknown wiki_attachment tool: {name}"
-            )
-
-    except xmlrpc.client.Fault as e:
-        return translate_xmlrpc_error(e, "wiki")
-    except ValueError as e:
-        return build_error_response(
-            "validation_error",
-            str(e),
-            "Check parameter values and retry.",
-        )
-    except Exception as e:
-        return build_error_response(
-            "server_error",
-            str(e),
-            "Contact Trac administrator or retry later.",
-        )
-
-
 async def _handle_put(
-    args: dict[str, Any], client: TracClient
+    client: TracClient, args: dict[str, Any]
 ) -> types.CallToolResult:
     """Handle wiki_attachment_put.
 
@@ -328,7 +280,7 @@ async def _handle_put(
 
 
 async def _handle_get(
-    args: dict[str, Any], client: TracClient
+    client: TracClient, args: dict[str, Any]
 ) -> types.CallToolResult:
     """Handle wiki_attachment_get.
 
@@ -403,7 +355,7 @@ async def _handle_get(
 
 
 async def _handle_list(
-    args: dict[str, Any], client: TracClient
+    client: TracClient, args: dict[str, Any]
 ) -> types.CallToolResult:
     """Handle wiki_attachment_list.
 
@@ -455,7 +407,7 @@ async def _handle_list(
 
 
 async def _handle_delete(
-    args: dict[str, Any], client: TracClient
+    client: TracClient, args: dict[str, Any]
 ) -> types.CallToolResult:
     """Handle wiki_attachment_delete."""
     page_name = args.get("page_name")
@@ -492,8 +444,7 @@ async def _handle_delete(
         raise
 
     text = (
-        f"Deleted attachment '{filename}' from wiki page "
-        f"'{page_name}'."
+        f"Deleted attachment '{filename}' from wiki page '{page_name}'."
     )
     structured = {
         "page_name": page_name,
@@ -507,7 +458,32 @@ async def _handle_delete(
     )
 
 
+# ToolSpec list for registry-based dispatch
+WIKI_ATTACHMENT_SPECS: list[ToolSpec] = [
+    ToolSpec(
+        tool=WIKI_ATTACHMENT_TOOLS[0],
+        permissions=frozenset({"WIKI_MODIFY"}),
+        handler=_handle_put,
+    ),
+    ToolSpec(
+        tool=WIKI_ATTACHMENT_TOOLS[1],
+        permissions=frozenset({"WIKI_VIEW"}),
+        handler=_handle_get,
+    ),
+    ToolSpec(
+        tool=WIKI_ATTACHMENT_TOOLS[2],
+        permissions=frozenset({"WIKI_VIEW"}),
+        handler=_handle_list,
+    ),
+    ToolSpec(
+        tool=WIKI_ATTACHMENT_TOOLS[3],
+        permissions=frozenset({"WIKI_DELETE"}),
+        handler=_handle_delete,
+    ),
+]
+
+
 __all__ = [
     "WIKI_ATTACHMENT_TOOLS",
-    "handle_wiki_attachment_tool",
+    "WIKI_ATTACHMENT_SPECS",
 ]

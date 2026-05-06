@@ -19,9 +19,26 @@ from unittest.mock import MagicMock
 import mcp.types as types
 import pytest
 
+from trac_mcp_server.mcp.tools.errors import build_error_response
+from trac_mcp_server.mcp.tools.registry import ToolRegistry
 from trac_mcp_server.mcp.tools.wiki_attachment import (
-    handle_wiki_attachment_tool,
+    WIKI_ATTACHMENT_SPECS,
 )
+
+_REGISTRY = ToolRegistry(WIKI_ATTACHMENT_SPECS)
+
+
+async def handle_wiki_attachment_tool(name, arguments, client):
+    """Test shim: dispatch via ToolRegistry, translating unknown-tool
+    errors into the validation_error envelope the tests expect."""
+    try:
+        return await _REGISTRY.call_tool(name, arguments, client)
+    except ValueError as e:
+        return build_error_response(
+            "validation_error",
+            str(e),
+            "Use list_tools to see available tools.",
+        )
 
 
 def _make_client() -> MagicMock:
@@ -42,7 +59,9 @@ def _make_client() -> MagicMock:
 class TestPut:
     """Tests for wiki_attachment_put handler."""
 
-    async def test_put_uses_putattachmentex_not_putattachment(self, tmp_path):
+    async def test_put_uses_putattachmentex_not_putattachment(
+        self, tmp_path
+    ):
         """The handler MUST call put_wiki_attachment (which wraps
         wiki.putAttachmentEx), forwarding description + replace.
 
@@ -100,7 +119,9 @@ class TestPut:
             == "diagram.png"
         )
         assert result.structuredContent["renamed_on_collision"] is False
-        assert result.structuredContent["bytes_uploaded"] == len(payload)
+        assert result.structuredContent["bytes_uploaded"] == len(
+            payload
+        )
         assert result.structuredContent["replace"] is False
 
     async def test_put_filename_override(self, tmp_path):
@@ -188,9 +209,7 @@ class TestPut:
             result.structuredContent["attached_filename"]
             == "diagram.2.png"
         )
-        assert (
-            result.structuredContent["renamed_on_collision"] is True
-        )
+        assert result.structuredContent["renamed_on_collision"] is True
         assert result.structuredContent["replace"] is False
 
     async def test_put_missing_page_name(self, tmp_path):
@@ -330,8 +349,8 @@ class TestGet:
         payload = b"hello"
 
         client = _make_client()
-        client.get_wiki_attachment.return_value = (
-            xmlrpc.client.Binary(payload)
+        client.get_wiki_attachment.return_value = xmlrpc.client.Binary(
+            payload
         )
 
         await handle_wiki_attachment_tool(
@@ -523,8 +542,8 @@ class TestDelete:
     async def test_delete_permission_denied(self):
         """Permission errors get a WIKI_DELETE-specific corrective action."""
         client = _make_client()
-        client.delete_wiki_attachment.side_effect = (
-            xmlrpc.client.Fault(403, "Permission denied")
+        client.delete_wiki_attachment.side_effect = xmlrpc.client.Fault(
+            403, "Permission denied"
         )
 
         result = await handle_wiki_attachment_tool(
@@ -566,9 +585,7 @@ async def test_live_round_trip(tmp_path):
     from trac_mcp_server.config import Config
     from trac_mcp_server.core.client import TracClient
 
-    page_name = os.environ.get(
-        "TRAC_TEST_WIKI_PAGE", "WikiStart"
-    )
+    page_name = os.environ.get("TRAC_TEST_WIKI_PAGE", "WikiStart")
 
     # Use the same env-driven config the server uses
     config = Config(

@@ -17,11 +17,8 @@ from ...core.async_utils import (
     run_sync_limited,
 )
 from ...core.client import TracClient
-from .errors import (
-    build_error_response,
-    format_timestamp,
-    translate_xmlrpc_error,
-)
+from .errors import build_error_response, format_timestamp
+from .registry import ToolSpec
 
 # Tool definitions for list_tools()
 TICKET_READ_TOOLS = [
@@ -111,58 +108,6 @@ TICKET_READ_TOOLS = [
         },
     ),
 ]
-
-
-async def handle_ticket_read_tool(
-    name: str,
-    arguments: dict | None,
-    client: TracClient,
-) -> types.CallToolResult:
-    """Handle read-only ticket tool execution.
-
-    Args:
-        name: Tool name (ticket_search, ticket_get, ticket_changelog, ticket_fields, ticket_actions)
-        arguments: Tool arguments (dict or None)
-        client: Pre-configured TracClient instance
-
-    Returns:
-        CallToolResult with both text content and structured JSON, or CallToolResult with isError=True for error cases
-
-    Raises:
-        ValueError: If tool name is unknown
-    """
-    # Ensure arguments is a dict
-    args = arguments or {}
-
-    try:
-        match name:
-            case "ticket_search":
-                return await _handle_search(client, args)
-            case "ticket_get":
-                return await _handle_get(client, args)
-            case "ticket_changelog":
-                return await _handle_changelog(client, args)
-            case "ticket_fields":
-                return await _handle_fields(client)
-            case "ticket_actions":
-                return await _handle_actions(client, args)
-            case _:
-                raise ValueError(f"Unknown ticket read tool: {name}")
-
-    except xmlrpc.client.Fault as e:
-        return translate_xmlrpc_error(e, "ticket")
-    except ValueError as e:
-        return build_error_response(
-            "validation_error",
-            str(e),
-            "Check parameter values and retry.",
-        )
-    except Exception as e:
-        return build_error_response(
-            "server_error",
-            str(e),
-            "Contact Trac administrator or retry later.",
-        )
 
 
 async def _handle_search(
@@ -365,12 +310,14 @@ async def _handle_changelog(
                     type="text",
                     text=f"No changelog entries for ticket #{ticket_id}",
                 )
-            ]
+            ],
+            structuredContent={"changelog": [], "ticket_id": ticket_id},
         )
 
     # Format entries
     # Changelog format: [[timestamp, author, field, oldvalue, newvalue, permanent], ...]
     entries = []
+    changelog_json = []
     for entry in changelog:
         timestamp = entry[0]
         author = entry[1]
@@ -400,11 +347,14 @@ async def _handle_changelog(
                     entries.append(
                         f"- {timestamp_str} by {author}: comment: {comment_lines[0]}"
                     )
+                newvalue_text = comment_text
             else:
                 entries.append(
                     f"- {timestamp_str} by {author}: comment added"
                 )
+                newvalue_text = ""
         else:
+            newvalue_text = newvalue
             if oldvalue and newvalue:
                 entries.append(
                     f"- {timestamp_str} by {author}: {field} changed from '{oldvalue}' to '{newvalue}'"
@@ -422,6 +372,16 @@ async def _handle_changelog(
                     f"- {timestamp_str} by {author}: {field} modified"
                 )
 
+        changelog_json.append(
+            {
+                "timestamp": timestamp_str,
+                "author": author,
+                "field": field,
+                "oldvalue": oldvalue,
+                "newvalue": newvalue_text,
+            }
+        )
+
     format_note = " (TracWiki format)" if raw else ""
     response_text = (
         f"Changelog for ticket #{ticket_id}{format_note}:\n"
@@ -429,11 +389,17 @@ async def _handle_changelog(
     )
 
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=response_text)]
+        content=[types.TextContent(type="text", text=response_text)],
+        structuredContent={
+            "changelog": changelog_json,
+            "ticket_id": ticket_id,
+        },
     )
 
 
-async def _handle_fields(client: TracClient) -> types.CallToolResult:
+async def _handle_fields(
+    client: TracClient, args: dict
+) -> types.CallToolResult:
     """Handle ticket_fields."""
     # Get field metadata
     fields = await run_sync(client.get_ticket_fields)
@@ -598,3 +564,31 @@ async def _handle_actions(
     )
 
 
+# ToolSpec list for registry-based dispatch
+TICKET_READ_SPECS: list[ToolSpec] = [
+    ToolSpec(
+        tool=TICKET_READ_TOOLS[0],
+        permissions=frozenset({"TICKET_VIEW"}),
+        handler=_handle_search,
+    ),
+    ToolSpec(
+        tool=TICKET_READ_TOOLS[1],
+        permissions=frozenset({"TICKET_VIEW"}),
+        handler=_handle_get,
+    ),
+    ToolSpec(
+        tool=TICKET_READ_TOOLS[2],
+        permissions=frozenset({"TICKET_VIEW"}),
+        handler=_handle_changelog,
+    ),
+    ToolSpec(
+        tool=TICKET_READ_TOOLS[3],
+        permissions=frozenset({"TICKET_VIEW"}),
+        handler=_handle_fields,
+    ),
+    ToolSpec(
+        tool=TICKET_READ_TOOLS[4],
+        permissions=frozenset({"TICKET_VIEW"}),
+        handler=_handle_actions,
+    ),
+]

@@ -12,9 +12,26 @@ from unittest.mock import MagicMock
 import mcp.types as types
 import pytest
 
+from trac_mcp_server.mcp.tools.errors import build_error_response
+from trac_mcp_server.mcp.tools.registry import ToolRegistry
 from trac_mcp_server.mcp.tools.ticket_attachment import (
-    handle_ticket_attachment_tool,
+    TICKET_ATTACHMENT_SPECS,
 )
+
+_REGISTRY = ToolRegistry(TICKET_ATTACHMENT_SPECS)
+
+
+async def handle_ticket_attachment_tool(name, arguments, client):
+    """Test shim: dispatch via ToolRegistry, translating unknown-tool
+    errors into the validation_error envelope the tests expect."""
+    try:
+        return await _REGISTRY.call_tool(name, arguments, client)
+    except ValueError as e:
+        return build_error_response(
+            "validation_error",
+            str(e),
+            "Use list_tools to see available tools.",
+        )
 
 
 def _make_client() -> MagicMock:
@@ -60,9 +77,13 @@ class TestPut:
         # Verify the bytes flowed through Binary unchanged
         client.put_ticket_attachment.assert_called_once()
         call_args = client.put_ticket_attachment.call_args
-        ticket_id_arg, filename_arg, description_arg, binary_arg, replace_arg = (
-            call_args[0]
-        )
+        (
+            ticket_id_arg,
+            filename_arg,
+            description_arg,
+            binary_arg,
+            replace_arg,
+        ) = call_args[0]
         assert ticket_id_arg == 42
         assert filename_arg == "report.bin"
         assert description_arg == "benchmark verdict"
@@ -71,10 +92,18 @@ class TestPut:
         assert replace_arg is False
 
         assert result.structuredContent["ticket_id"] == 42
-        assert result.structuredContent["requested_filename"] == "report.bin"
-        assert result.structuredContent["attached_filename"] == "report.bin"
+        assert (
+            result.structuredContent["requested_filename"]
+            == "report.bin"
+        )
+        assert (
+            result.structuredContent["attached_filename"]
+            == "report.bin"
+        )
         assert result.structuredContent["renamed_on_collision"] is False
-        assert result.structuredContent["bytes_uploaded"] == len(payload)
+        assert result.structuredContent["bytes_uploaded"] == len(
+            payload
+        )
         assert result.structuredContent["replace"] is False
 
     async def test_put_filename_override(self, tmp_path):
@@ -147,8 +176,14 @@ class TestPut:
 
         assert isinstance(result, types.CallToolResult)
         assert result.isError is None or result.isError is False
-        assert result.structuredContent["requested_filename"] == "report.bin"
-        assert result.structuredContent["attached_filename"] == "report.2.bin"
+        assert (
+            result.structuredContent["requested_filename"]
+            == "report.bin"
+        )
+        assert (
+            result.structuredContent["attached_filename"]
+            == "report.2.bin"
+        )
         assert result.structuredContent["renamed_on_collision"] is True
         assert result.structuredContent["replace"] is False
 
@@ -258,8 +293,8 @@ class TestGet:
         payload = b"hello"
 
         client = _make_client()
-        client.get_ticket_attachment.return_value = xmlrpc.client.Binary(
-            payload
+        client.get_ticket_attachment.return_value = (
+            xmlrpc.client.Binary(payload)
         )
 
         await handle_ticket_attachment_tool(
@@ -353,7 +388,13 @@ class TestList:
     async def test_list_returns_structured_attachments(self):
         client = _make_client()
         client.list_ticket_attachments.return_value = [
-            ("report.bin", "verdict", 1024, "2024-01-01T00:00:00", "alice"),
+            (
+                "report.bin",
+                "verdict",
+                1024,
+                "2024-01-01T00:00:00",
+                "alice",
+            ),
             ("notes.txt", "", 64, "2024-01-02T00:00:00", "bob"),
         ]
 
@@ -516,7 +557,8 @@ async def test_live_round_trip(tmp_path):
         "ticket_attachment_list", {"ticket_id": ticket_id}, client
     )
     filenames = [
-        a["filename"] for a in list_result.structuredContent["attachments"]
+        a["filename"]
+        for a in list_result.structuredContent["attachments"]
     ]
     assert "live-fixture.bin" in filenames
 

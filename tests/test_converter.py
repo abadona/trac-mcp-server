@@ -329,7 +329,9 @@ Second paragraph."""
         """Test conversion without warnings."""
         result = convert_with_warnings("# Simple heading")
         self.assertIsInstance(result, ConversionResult)
-        self.assertEqual(result.tracwiki, "= Simple heading = #simple-heading")
+        self.assertEqual(
+            result.tracwiki, "= Simple heading = #simple-heading"
+        )
         self.assertEqual(len(result.warnings), 0)
 
     def test_convert_with_warnings_table_converted(self):
@@ -1183,14 +1185,20 @@ class TestAutoConvert(unittest.TestCase):
 
         return asyncio.run(coro)
 
-    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
     def test_explicit_tracwiki_target(self, mock_caps):
         """target_format='tracwiki' with markdown input converts to tracwiki."""
         from trac_mcp_server.converters.common import auto_convert
 
         mock_config = MagicMock()
         result = self._run(
-            auto_convert("# Heading\n\nParagraph", mock_config, target_format="tracwiki")
+            auto_convert(
+                "# Heading\n\nParagraph",
+                mock_config,
+                target_format="tracwiki",
+            )
         )
 
         self.assertTrue(result.converted)
@@ -1199,14 +1207,20 @@ class TestAutoConvert(unittest.TestCase):
         # Capabilities should not be queried when target is explicit
         mock_caps.assert_not_called()
 
-    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
     def test_explicit_markdown_target(self, mock_caps):
         """target_format='markdown' with tracwiki input converts to markdown."""
         from trac_mcp_server.converters.common import auto_convert
 
         mock_config = MagicMock()
         result = self._run(
-            auto_convert("= Heading =\n\nParagraph", mock_config, target_format="markdown")
+            auto_convert(
+                "= Heading =\n\nParagraph",
+                mock_config,
+                target_format="markdown",
+            )
         )
 
         self.assertTrue(result.converted)
@@ -1214,7 +1228,9 @@ class TestAutoConvert(unittest.TestCase):
         self.assertIn("# Heading", result.text)
         mock_caps.assert_not_called()
 
-    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
     def test_same_format_passthrough_markdown(self, _mock_caps):
         """target_format='markdown' with markdown input — no conversion."""
         from trac_mcp_server.converters.common import auto_convert
@@ -1228,7 +1244,9 @@ class TestAutoConvert(unittest.TestCase):
         self.assertFalse(result.converted)
         self.assertEqual(result.text, text)
 
-    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
     def test_auto_detect_with_markdown_processor(self, mock_caps):
         """target_format=None, server has markdown processor — target becomes 'markdown'."""
         from trac_mcp_server.converters.common import auto_convert
@@ -1244,13 +1262,17 @@ class TestAutoConvert(unittest.TestCase):
 
         # TracWiki input should be converted to markdown
         result = self._run(
-            auto_convert("= Heading =\n\nText", mock_config, target_format=None)
+            auto_convert(
+                "= Heading =\n\nText", mock_config, target_format=None
+            )
         )
 
         self.assertEqual(result.target_format, "markdown")
         mock_caps.assert_called_once_with(mock_config)
 
-    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
     def test_auto_detect_without_markdown_processor(self, mock_caps):
         """target_format=None, no markdown processor — target becomes 'tracwiki'."""
         from trac_mcp_server.converters.common import auto_convert
@@ -1266,13 +1288,19 @@ class TestAutoConvert(unittest.TestCase):
 
         # Markdown input should be converted to tracwiki
         result = self._run(
-            auto_convert("# Heading\n\nText", mock_config, target_format=None)
+            auto_convert(
+                "# Heading\n\nText", mock_config, target_format=None
+            )
         )
 
         self.assertEqual(result.target_format, "tracwiki")
 
-    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
-    def test_capability_detection_failure_defaults_tracwiki(self, mock_caps):
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
+    def test_capability_detection_failure_defaults_tracwiki(
+        self, mock_caps
+    ):
         """target_format=None, capability detection raises — defaults to 'tracwiki'."""
         from trac_mcp_server.converters.common import auto_convert
 
@@ -1284,13 +1312,17 @@ class TestAutoConvert(unittest.TestCase):
         mock_caps.side_effect = raise_error
 
         result = self._run(
-            auto_convert("# Heading\n\nText", mock_config, target_format=None)
+            auto_convert(
+                "# Heading\n\nText", mock_config, target_format=None
+            )
         )
 
         self.assertEqual(result.target_format, "tracwiki")
         self.assertTrue(result.converted)
 
-    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
     def test_same_format_passthrough_tracwiki(self, _mock_caps):
         """target_format='tracwiki' with tracwiki input — no conversion."""
         from trac_mcp_server.converters.common import auto_convert
@@ -1304,14 +1336,64 @@ class TestAutoConvert(unittest.TestCase):
         self.assertFalse(result.converted)
         self.assertEqual(result.text, text)
 
-    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
+    def test_explicit_source_format_overrides_heuristic(
+        self, _mock_caps
+    ):
+        """source_format='markdown' is honored as the canonical answer.
+
+        Regression test: a Markdown file describing the converter itself
+        contained TracWiki examples (``= Heading =``) inside fenced code
+        blocks. Even after the heuristic was hardened to redact code-fence
+        interiors before scanning, callers that already know the source
+        format (e.g. from a ``.md`` extension) MUST be able to bypass
+        detection entirely — the explicit signal is more authoritative
+        than any heuristic could be.
+        """
+        from trac_mcp_server.converters.common import auto_convert
+
+        mock_config = MagicMock()
+        text = (
+            "# Format Conversion\n"
+            "\n"
+            "Some prose.\n"
+            "\n"
+            "```\n"
+            "TracWiki:  = Heading 1 =\n"
+            "TracWiki:  == Heading 2 ==\n"
+            "```\n"
+        )
+
+        # With source_format='markdown', conversion must run regardless of
+        # what the heuristic would have decided.
+        result = self._run(
+            auto_convert(
+                text,
+                mock_config,
+                target_format="tracwiki",
+                source_format="markdown",
+            )
+        )
+        self.assertTrue(result.converted)
+        self.assertEqual(result.source_format, "markdown")
+        self.assertEqual(result.target_format, "tracwiki")
+        # The top-level Markdown heading must be converted to TracWiki form.
+        self.assertIn("= Format Conversion =", result.text)
+
+    @patch(
+        "trac_mcp_server.detection.capabilities.get_server_capabilities"
+    )
     def test_returns_conversion_result(self, _mock_caps):
         """Return type is ConversionResult with all expected fields."""
         from trac_mcp_server.converters.common import auto_convert
 
         mock_config = MagicMock()
         result = self._run(
-            auto_convert("# Test", mock_config, target_format="tracwiki")
+            auto_convert(
+                "# Test", mock_config, target_format="tracwiki"
+            )
         )
 
         self.assertIsInstance(result, ConversionResult)
@@ -1320,50 +1402,6 @@ class TestAutoConvert(unittest.TestCase):
         self.assertIsNotNone(result.target_format)
         self.assertIsInstance(result.converted, bool)
         self.assertIsInstance(result.warnings, list)
-
-    @patch("trac_mcp_server.detection.capabilities.get_server_capabilities")
-    def test_explicit_source_format_overrides_heuristic(self, _mock_caps):
-        """Caller-supplied source_format MUST be honored even when heuristic
-        would disagree.
-
-        Regression: a Markdown spec doc that contains a TracWiki-style
-        heading inside a fenced code example (e.g. eval-payload-spec.md
-        showing ``= Evals: AuditDocs =`` as a documented output) used to
-        get classified as TracWiki by the heuristic, causing pass-through
-        and storing raw Markdown on the wiki. The caller (wiki_file_push
-        with explicit ``format=markdown``) already knows the source
-        format and MUST be able to bypass detection.
-        """
-        from trac_mcp_server.converters.common import auto_convert
-
-        markdown_with_bait = (
-            "# Real Markdown Heading\n"
-            "\n"
-            "This document is Markdown but documents TracWiki syntax:\n"
-            "\n"
-            "```\n"
-            "= Pretend TracWiki Heading =\n"
-            "== Subheading ==\n"
-            "```\n"
-            "\n"
-            "Back to Markdown prose.\n"
-        )
-        mock_config = MagicMock()
-        result = self._run(
-            auto_convert(
-                markdown_with_bait,
-                mock_config,
-                target_format="tracwiki",
-                source_format="markdown",
-            )
-        )
-        self.assertTrue(
-            result.converted,
-            f"Conversion was skipped despite explicit source_format='markdown'. "
-            f"Stored text:\n{result.text}",
-        )
-        self.assertEqual(result.source_format, "markdown")
-        self.assertIn("= Real Markdown Heading =", result.text)
 
 
 class TestHeadingExplicitAnchor(unittest.TestCase):
@@ -1396,7 +1434,9 @@ class TestHeadingExplicitAnchor(unittest.TestCase):
         but preserved in the visible heading text.
         """
         self.assertEqual(
-            markdown_to_tracwiki("## EvalRef marker fields (`ticket-comment`)"),
+            markdown_to_tracwiki(
+                "## EvalRef marker fields (`ticket-comment`)"
+            ),
             "== EvalRef marker fields (`ticket-comment`) == "
             "#evalref-marker-fields-ticket-comment",
         )
@@ -1481,7 +1521,9 @@ class TestDetectFormatHeuristicFenceAware(unittest.TestCase):
     """
 
     def test_markdown_with_tracwiki_example_in_fence_is_markdown(self):
-        from trac_mcp_server.converters.common import detect_format_heuristic
+        from trac_mcp_server.converters.common import (
+            detect_format_heuristic,
+        )
 
         text = (
             "# Markdown Heading\n"
@@ -1497,7 +1539,9 @@ class TestDetectFormatHeuristicFenceAware(unittest.TestCase):
         self.assertEqual(detect_format_heuristic(text), "markdown")
 
     def test_tracwiki_with_markdown_example_in_fence_is_tracwiki(self):
-        from trac_mcp_server.converters.common import detect_format_heuristic
+        from trac_mcp_server.converters.common import (
+            detect_format_heuristic,
+        )
 
         text = (
             "= TracWiki Heading =\n"
@@ -1516,7 +1560,9 @@ class TestDetectFormatHeuristicFenceAware(unittest.TestCase):
         """``key = value = result`` inline prose must not be mistaken for
         a TracWiki heading. The fixed regex anchors to line start AND end.
         """
-        from trac_mcp_server.converters.common import detect_format_heuristic
+        from trac_mcp_server.converters.common import (
+            detect_format_heuristic,
+        )
 
         text = (
             "# Markdown Heading\n"
@@ -1528,13 +1574,17 @@ class TestDetectFormatHeuristicFenceAware(unittest.TestCase):
         self.assertEqual(detect_format_heuristic(text), "markdown")
 
     def test_clean_tracwiki_still_detected(self):
-        from trac_mcp_server.converters.common import detect_format_heuristic
+        from trac_mcp_server.converters.common import (
+            detect_format_heuristic,
+        )
 
         text = "= H1 =\n\n== H2 ==\n\nBody with '''bold'''.\n"
         self.assertEqual(detect_format_heuristic(text), "tracwiki")
 
     def test_clean_markdown_still_detected(self):
-        from trac_mcp_server.converters.common import detect_format_heuristic
+        from trac_mcp_server.converters.common import (
+            detect_format_heuristic,
+        )
 
         text = "# H1\n\n## H2\n\nBody with **bold**.\n"
         self.assertEqual(detect_format_heuristic(text), "markdown")
@@ -1544,7 +1594,9 @@ class TestDetectFormatHeuristicFenceAware(unittest.TestCase):
         regression on docs/reference/eval-payload-spec.md — Markdown
         spec containing TracWiki output examples in fenced blocks.
         """
-        from trac_mcp_server.converters.common import detect_format_heuristic
+        from trac_mcp_server.converters.common import (
+            detect_format_heuristic,
+        )
 
         text = (
             "# Eval Payload Spec\n"
