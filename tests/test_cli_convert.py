@@ -222,7 +222,7 @@ def test_main_writes_warnings_to_stderr_not_stdout(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.convert_text",
-        lambda text, src, tgt: fake_result,
+        lambda *_: fake_result,
     )
     monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
     exit_code = main(["--to", "tracwiki"])
