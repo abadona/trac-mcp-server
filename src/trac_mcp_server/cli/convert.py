@@ -6,6 +6,7 @@ file I/O, clipboard I/O, converter options, error handling, and
 verbosity flags (--quiet, --verbose) on top of this skeleton.
 # Phase 20 adds Trac wiring: --trac-* flags, --check-trac, EXIT_TRAC.
 # Phase 21 adds --from-wiki: fetch TracWiki pages via TracClient.
+# Phase 22 adds --to-wiki + --wiki-comment: write TracWiki pages via TracClient.
 """
 
 import argparse
@@ -37,6 +38,7 @@ EXIT_TRAC = 4  # Trac client errors (auth, network, protocol) — used by --chec
 # ---------------------------------------------------------------------------
 # Trac helpers (Phase 20)
 # ---------------------------------------------------------------------------
+
 
 def _read_password_file(path: str) -> str | None:
     """Read password from a file (single line, trimmed).
@@ -96,7 +98,10 @@ def _fetch_wiki_page(page_name: str, args) -> tuple[str | None, int]:
 
     overrides = _build_trac_overrides(args)
     if overrides is None:
-        return None, EXIT_TRAC  # password-file diagnostic already written
+        return (
+            None,
+            EXIT_TRAC,
+        )  # password-file diagnostic already written
 
     try:
         config, _ = bootstrap_config(overrides)
@@ -133,9 +138,7 @@ def _fetch_wiki_page(page_name: str, args) -> tuple[str | None, int]:
         )
         return None, EXIT_TRAC
     except Exception as e:
-        sys.stderr.write(
-            f"trac-convert: wiki fetch failed: {e}\n"
-        )
+        sys.stderr.write(f"trac-convert: wiki fetch failed: {e}\n")
         return None, EXIT_TRAC
 
     return text, EXIT_OK
@@ -332,6 +335,26 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--to-wiki",
+        dest="to_wiki",
+        default=None,
+        metavar="PAGE",
+        help=(
+            "Write output to a Trac wiki page (target format is TracWiki). "
+            "Mutually exclusive with -o/--output and --to-clipboard."
+        ),
+    )
+    parser.add_argument(
+        "--wiki-comment",
+        dest="wiki_comment",
+        default="Updated via trac-convert",
+        metavar="MSG",
+        help=(
+            "Change comment recorded on the wiki page when using --to-wiki. "
+            "Default: 'Updated via trac-convert'. Ignored without --to-wiki."
+        ),
+    )
+    parser.add_argument(
         "--check-trac",
         dest="check_trac",
         action="store_true",
@@ -446,8 +469,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_trac:
         return _check_trac(args)
 
-    # --- --to is required for conversion (not for --check-trac) ---
-    if args.target_format is None:
+    # --- --to is required for conversion (not for --check-trac or --to-wiki) ---
+    if args.target_format is None and args.to_wiki is None:
         sys.stderr.write("trac-convert: --to is required\n")
         return EXIT_USAGE_ERROR
 
@@ -462,6 +485,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.from_clipboard:
             sys.stderr.write(
                 "trac-convert: --from-wiki and --from-clipboard are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
+
+    # --- --to-wiki mutex validation ---
+    if args.to_wiki is not None:
+        if args.output_file is not None:
+            sys.stderr.write(
+                "trac-convert: --to-wiki and --output are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
+        if args.to_clipboard:
+            sys.stderr.write(
+                "trac-convert: --to-wiki and --to-clipboard are"
                 " mutually exclusive\n"
             )
             return EXIT_RUNTIME_ERROR
