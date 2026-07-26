@@ -80,6 +80,67 @@ def _build_trac_overrides(args) -> dict:
     return overrides
 
 
+def _fetch_wiki_page(page_name: str, args) -> tuple[str | None, int]:
+    """Fetch a TracWiki page's raw source via TracClient.
+
+    Reuses _build_trac_overrides() and bootstrap_config() so the same
+    layered config precedence (CLI > env > YAML > defaults) that
+    --check-trac uses also applies here.
+
+    Returns (text, EXIT_OK) on success or (None, EXIT_TRAC) on any
+    failure. Never prints the password.
+    """
+    import xmlrpc.client
+
+    import requests.exceptions
+
+    overrides = _build_trac_overrides(args)
+    if overrides is None:
+        return None, EXIT_TRAC  # password-file diagnostic already written
+
+    try:
+        config, _sources = bootstrap_config(overrides)
+    except ValueError:
+        sys.stderr.write(
+            "trac-convert: no Trac credentials found.\n"
+            "  Set env vars TRAC_URL, TRAC_USERNAME, TRAC_PASSWORD, or\n"
+            "  create .trac_mcp/config.yaml (see docs/reference/cli.md).\n"
+        )
+        return None, EXIT_TRAC
+
+    client = TracClient(config)
+    try:
+        text = client.get_wiki_page(page_name)
+    except xmlrpc.client.Fault as e:
+        # faultCode == 1 is Trac's "not found" convention; other faults
+        # are auth / permission / protocol errors.
+        if getattr(e, "faultCode", None) == 1:
+            sys.stderr.write(
+                f"trac-convert: wiki page not found: {page_name}\n"
+            )
+        else:
+            sys.stderr.write(
+                f"trac-convert: Trac fault fetching"
+                f" {page_name}: {e.faultString}\n"
+            )
+        return None, EXIT_TRAC
+    except requests.exceptions.SSLError as e:
+        sys.stderr.write(f"trac-convert: SSL error: {e}\n")
+        return None, EXIT_TRAC
+    except requests.exceptions.ConnectionError as e:
+        sys.stderr.write(
+            f"trac-convert: cannot reach Trac at {config.trac_url}: {e}\n"
+        )
+        return None, EXIT_TRAC
+    except Exception as e:
+        sys.stderr.write(
+            f"trac-convert: wiki fetch failed: {e}\n"
+        )
+        return None, EXIT_TRAC
+
+    return text, EXIT_OK
+
+
 def _check_trac(args) -> int:
     """Resolve Trac config, ping server, report status.
 
@@ -348,12 +409,12 @@ def convert_text(
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run the CLI.
 
-    Reads from --from-clipboard, positional FILE, or stdin (in that
-    order of precedence), dispatches via convert_text(), writes
-    result.text verbatim to --to-clipboard, --output FILE, or stdout
-    (in that order of precedence), emits result.warnings to stderr one
-    line each prefixed with ``warning: ``, and returns an integer exit
-    code for ``sys.exit``.
+    Reads from --from-wiki PAGE, --from-clipboard, positional FILE, or
+    stdin (in that order of precedence), dispatches via convert_text(),
+    writes result.text verbatim to --to-clipboard, --output FILE, or
+    stdout (in that order of precedence), emits result.warnings to
+    stderr one line each prefixed with ``warning: ``, and returns an
+    integer exit code for ``sys.exit``.
 
     Exit codes:
     - 0 (EXIT_OK): success (including pass-through with no conversion).
@@ -365,7 +426,8 @@ def main(argv: list[str] | None = None) -> int:
     - 3 (EXIT_CONVERSION_ERROR): the converter raised an unexpected
       exception; a ``trac-convert: conversion failed: <reason>`` message
       is written to stderr (no traceback).
-    - 4 (EXIT_TRAC): Trac connectivity or auth error from --check-trac.
+    - 4 (EXIT_TRAC): Trac connectivity, auth, or fetch error from
+      --check-trac or --from-wiki.
 
     Note on direction-scoped flags: --heading-anchors only affects the
     md→tracwiki direction and is silently ignored for tracwiki→md (and
@@ -419,7 +481,14 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_RUNTIME_ERROR
 
     # --- read input ---
-    if args.from_clipboard:
+    if args.from_wiki is not None:
+        text, fetch_rc = _fetch_wiki_page(args.from_wiki, args)
+        if text is None:
+            return fetch_rc
+        # --from-wiki authoritatively knows the source is TracWiki;
+        # silently override --from (which may still be 'auto' or 'md').
+        args.source_format = "tracwiki"
+    elif args.from_clipboard:
         try:
             text = pyperclip.paste()
         except pyperclip.PyperclipException as e:
