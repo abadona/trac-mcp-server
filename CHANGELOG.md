@@ -4,7 +4,7 @@ All notable changes to trac-mcp-server will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [2.1.1] - Unreleased
+## [2.1.3] - 2026-07-25
 
 ### Added
 - Batch ticket operations: `ticket_batch_create`, `ticket_batch_delete`, `ticket_batch_update` -- best-effort processing with per-item results and bounded parallelism via `gather_limited`

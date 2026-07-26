@@ -61,7 +61,9 @@ class ScenarioResult:
     actual_tools: list[str]
     extra_tools: list[str]  # in actual but not expected
     missing_tools: list[str]  # in expected but not actual
-    live_results: dict[str, bool] | None = None  # tool_name -> success (if --live)
+    live_results: dict[str, bool] | None = (
+        None  # tool_name -> success (if --live)
+    )
     error: str | None = None  # if scenario failed to run at all
 
 
@@ -154,8 +156,13 @@ async def run_scenario(
     )
 
     try:
-        async with stdio_client(server_params) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
+        async with stdio_client(server_params) as (
+            read_stream,
+            write_stream,
+        ):
+            async with ClientSession(
+                read_stream, write_stream
+            ) as session:
                 init_result = await session.initialize()
                 log.debug(
                     "Scenario %s: connected to %s v%s",
@@ -166,11 +173,15 @@ async def run_scenario(
 
                 # List tools
                 tools_result = await session.list_tools()
-                actual_tools = sorted(t.name for t in tools_result.tools)
+                actual_tools = sorted(
+                    t.name for t in tools_result.tools
+                )
 
                 # Update reference files if requested
                 if update_refs:
-                    write_expected_tools(expected_tools_path, actual_tools)
+                    write_expected_tools(
+                        expected_tools_path, actual_tools
+                    )
                     log.info(
                         "Scenario %s: updated reference file with %d tools",
                         name,
@@ -186,7 +197,9 @@ async def run_scenario(
                     )
 
                 # Load expected tools
-                expected_tools = load_expected_tools(expected_tools_path)
+                expected_tools = load_expected_tools(
+                    expected_tools_path
+                )
 
                 # Compare
                 actual_set = set(actual_tools)
@@ -213,7 +226,10 @@ async def run_scenario(
                                 for c in result.content
                                 if isinstance(c, types.TextContent)
                             )
-                            is_ok = not result.isError and "error_type" not in text.lower()
+                            is_ok = (
+                                not result.isError
+                                and "error_type" not in text.lower()
+                            )
                             live_results[tool_name] = is_ok
                             log.debug(
                                 "Scenario %s: %s call %s -> %s",
@@ -293,7 +309,9 @@ async def async_main(args: argparse.Namespace) -> int:
             if s in all_scenarios:
                 selected.append(s)
             else:
-                print(f"Warning: scenario '{s}' not found (available: {', '.join(all_scenarios)})")
+                print(
+                    f"Warning: scenario '{s}' not found (available: {', '.join(all_scenarios)})"
+                )
         if not selected:
             print("No valid scenarios selected.")
             return 1
@@ -303,7 +321,9 @@ async def async_main(args: argparse.Namespace) -> int:
 
     print(f"Scenarios: {', '.join(scenarios_to_run)}")
     if args.update_refs:
-        print("Mode: --update-refs (writing live tool lists to reference files)")
+        print(
+            "Mode: --update-refs (writing live tool lists to reference files)"
+        )
     elif args.live:
         print("Mode: --live (comparing + running safe tool calls)")
     else:
@@ -325,7 +345,9 @@ async def async_main(args: argparse.Namespace) -> int:
     suite = SuiteResult()
     for name in scenarios_to_run:
         permissions_path = SCENARIOS_DIR / f"{name}.permissions"
-        expected_tools_path = SCENARIOS_DIR / f"{name}.expected_tools.txt"
+        expected_tools_path = (
+            SCENARIOS_DIR / f"{name}.expected_tools.txt"
+        )
 
         print(f"--- Scenario: {name} ---")
         logger.info("Running scenario: %s", name)
@@ -345,15 +367,23 @@ async def async_main(args: argparse.Namespace) -> int:
         if result.error:
             print(f"  ERROR: {result.error}")
         elif args.update_refs:
-            print(f"  UPDATED: {len(result.actual_tools)} tools written to {expected_tools_path.name}")
+            print(
+                f"  UPDATED: {len(result.actual_tools)} tools written to {expected_tools_path.name}"
+            )
         elif result.passed:
-            print(f"  PASS: {len(result.actual_tools)} tools match expected")
+            print(
+                f"  PASS: {len(result.actual_tools)} tools match expected"
+            )
         else:
-            print(f"  FAIL: tool list mismatch")
+            print("  FAIL: tool list mismatch")
             if result.extra_tools:
-                print(f"    Extra (in server, not in reference): {', '.join(result.extra_tools)}")
+                print(
+                    f"    Extra (in server, not in reference): {', '.join(result.extra_tools)}"
+                )
             if result.missing_tools:
-                print(f"    Missing (in reference, not in server): {', '.join(result.missing_tools)}")
+                print(
+                    f"    Missing (in reference, not in server): {', '.join(result.missing_tools)}"
+                )
 
         # Print live results if any
         if result.live_results:
@@ -361,7 +391,9 @@ async def async_main(args: argparse.Namespace) -> int:
             live_total = len(result.live_results)
             print(f"  Live calls: {live_ok}/{live_total} succeeded")
             if args.verbose:
-                for tool_name, ok in sorted(result.live_results.items()):
+                for tool_name, ok in sorted(
+                    result.live_results.items()
+                ):
                     status = "OK" if ok else "FAIL"
                     print(f"    [{status}] {tool_name}")
 
@@ -371,7 +403,9 @@ async def async_main(args: argparse.Namespace) -> int:
     print(f"{'=' * 70}")
     print(f"{'SUMMARY':^70}")
     print(f"{'=' * 70}")
-    print(f"Scenarios: {suite.total} | Passed: {suite.passed} | Failed: {suite.failed}")
+    print(
+        f"Scenarios: {suite.total} | Passed: {suite.passed} | Failed: {suite.failed}"
+    )
 
     if suite.failed > 0:
         print("\nFailed scenarios:")
@@ -380,9 +414,19 @@ async def async_main(args: argparse.Namespace) -> int:
                 if s.error:
                     print(f"  - {s.name}: {s.error}")
                 else:
-                    extra_str = f" +{len(s.extra_tools)}" if s.extra_tools else ""
-                    missing_str = f" -{len(s.missing_tools)}" if s.missing_tools else ""
-                    print(f"  - {s.name}: mismatch{extra_str}{missing_str}")
+                    extra_str = (
+                        f" +{len(s.extra_tools)}"
+                        if s.extra_tools
+                        else ""
+                    )
+                    missing_str = (
+                        f" -{len(s.missing_tools)}"
+                        if s.missing_tools
+                        else ""
+                    )
+                    print(
+                        f"  - {s.name}: mismatch{extra_str}{missing_str}"
+                    )
 
     return 0 if suite.failed == 0 else 1
 
@@ -438,10 +482,12 @@ Examples:
         "--url", help="Override Trac URL (passed to trac-mcp-server)"
     )
     parser.add_argument(
-        "--username", help="Override username (passed to trac-mcp-server)"
+        "--username",
+        help="Override username (passed to trac-mcp-server)",
     )
     parser.add_argument(
-        "--password", help="Override password (passed to trac-mcp-server)"
+        "--password",
+        help="Override password (passed to trac-mcp-server)",
     )
     parser.add_argument(
         "--insecure",

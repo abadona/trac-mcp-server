@@ -120,7 +120,9 @@ class ComprehensiveMCPTester:
         self.report = CheckReport()
         self.report.binary_version = PACKAGE_VERSION
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.tools_filter: set[str] | None = set(tools_filter) if tools_filter else None
+        self.tools_filter: set[str] | None = (
+            set(tools_filter) if tools_filter else None
+        )
         self.available_tools: list[types.Tool] = []
 
         # Track test resources for cleanup
@@ -157,7 +159,9 @@ class ComprehensiveMCPTester:
     ) -> tuple[bool, str, types.CallToolResult | None]:
         """Call an MCP tool via the client session and return (success, response_text, raw_result)."""
         try:
-            result = await self.session.call_tool(tool_name, arguments or {})
+            result = await self.session.call_tool(
+                tool_name, arguments or {}
+            )
 
             # Extract text from CallToolResult.content
             response_text = "\n".join(
@@ -209,7 +213,9 @@ class ComprehensiveMCPTester:
         print(f"\n{self._color('=== Phase 1b: System Tools ===')}")
 
         # get_server_time
-        success, response, raw_result = await self._call_tool("get_server_time")
+        success, response, raw_result = await self._call_tool(
+            "get_server_time"
+        )
 
         # Verify response contains valid timestamp
         passed = False
@@ -250,7 +256,9 @@ class ComprehensiveMCPTester:
 
         # ticket_search - default query
         _args: dict = {}
-        success, response, raw_result = await self._call_tool("ticket_search")
+        success, response, raw_result = await self._call_tool(
+            "ticket_search"
+        )
         result = CheckResult(
             tool="ticket_search",
             test_name="default_query",
@@ -267,7 +275,8 @@ class ComprehensiveMCPTester:
         # ticket_search - custom query with max_results
         _args = {"query": "status=closed", "max_results": 5}
         success, response, raw_result = await self._call_tool(
-            "ticket_search", _args,
+            "ticket_search",
+            _args,
         )
         result = CheckResult(
             tool="ticket_search",
@@ -376,7 +385,8 @@ class ComprehensiveMCPTester:
             # ticket_changelog - raw mode
             _args = {"ticket_id": ticket_id, "raw": True}
             success, response, raw_result = await self._call_tool(
-                "ticket_changelog", _args,
+                "ticket_changelog",
+                _args,
             )
             result = CheckResult(
                 tool="ticket_changelog",
@@ -429,7 +439,9 @@ class ComprehensiveMCPTester:
             self._log_result(result)
 
         # ticket_fields
-        success, response, raw_result = await self._call_tool("ticket_fields")
+        success, response, raw_result = await self._call_tool(
+            "ticket_fields"
+        )
         result = CheckResult(
             tool="ticket_fields",
             test_name="get_fields",
@@ -572,7 +584,9 @@ class ComprehensiveMCPTester:
         )
 
         # milestone_list
-        success, response, raw_result = await self._call_tool("milestone_list")
+        success, response, raw_result = await self._call_tool(
+            "milestone_list"
+        )
         milestone_name = None
         if (
             success
@@ -666,7 +680,8 @@ print("hello world")
             "keywords": "mcp-test,auto-delete",
         }
         success, response, raw_result = await self._call_tool(
-            "ticket_create", _args,
+            "ticket_create",
+            _args,
         )
 
         if success and "Created ticket #" in response:
@@ -693,9 +708,13 @@ print("hello world")
 
         if self.test_ticket_id:
             # Verify Markdown conversion
-            _verify_args = {"ticket_id": self.test_ticket_id, "raw": True}
+            _verify_args = {
+                "ticket_id": self.test_ticket_id,
+                "raw": True,
+            }
             _, verify_response, _verify_raw = await self._call_tool(
-                "ticket_get", _verify_args,
+                "ticket_get",
+                _verify_args,
             )
             # Check for TracWiki markers ('''bold''' instead of **bold**)
             has_tracwiki = (
@@ -723,7 +742,8 @@ print("hello world")
                 "comment": "### Update Comment\n\nAdding a **formatted** comment.",
             }
             success, response, raw_result = await self._call_tool(
-                "ticket_update", _args,
+                "ticket_update",
+                _args,
             )
             result = CheckResult(
                 tool="ticket_update",
@@ -744,7 +764,8 @@ print("hello world")
                 "keywords": "mcp-test,auto-delete,updated",
             }
             success, response, raw_result = await self._call_tool(
-                "ticket_update", _args,
+                "ticket_update",
+                _args,
             )
             result = CheckResult(
                 tool="ticket_update",
@@ -791,7 +812,8 @@ print('hello')
             "comment": "MCP test page creation",
         }
         success, response, raw_result = await self._call_tool(
-            "wiki_create", _args,
+            "wiki_create",
+            _args,
         )
 
         result = CheckResult(
@@ -825,7 +847,10 @@ print('hello')
                 passed=has_tracwiki,
                 response=verify_response[:400],
                 notes="Verified Markdown converted to TracWiki",
-                call_args={"page_name": self.test_wiki_page, "raw": True},
+                call_args={
+                    "page_name": self.test_wiki_page,
+                    "raw": True,
+                },
                 **_extract_raw_fields(_raw),
             )
             self.report.results.append(result)
@@ -837,7 +862,8 @@ print('hello')
                 "content": "Duplicate content",
             }
             success, response, raw_result = await self._call_tool(
-                "wiki_create", _args,
+                "wiki_create",
+                _args,
             )
             result = CheckResult(
                 tool="wiki_create",
@@ -860,7 +886,8 @@ print('hello')
                 "comment": "MCP test page update",
             }
             success, response, raw_result = await self._call_tool(
-                "wiki_update", _args,
+                "wiki_update",
+                _args,
             )
             result = CheckResult(
                 tool="wiki_update",
@@ -886,7 +913,8 @@ print('hello')
                 "comment": "Should conflict",
             }
             success, response, raw_result = await self._call_tool(
-                "wiki_update", _args,
+                "wiki_update",
+                _args,
             )
             # Note: Some Trac versions don't enforce optimistic locking
             result = CheckResult(
@@ -947,7 +975,8 @@ print('hello')
                 "comment": "MCP file push test",
             }
             success, response, raw_result = await self._call_tool(
-                "wiki_file_push", _args,
+                "wiki_file_push",
+                _args,
             )
             result = CheckResult(
                 tool="wiki_file_push",
@@ -974,7 +1003,8 @@ print('hello')
                     "format": "markdown",
                 }
                 success, response, raw_result = await self._call_tool(
-                    "wiki_file_pull", _args,
+                    "wiki_file_pull",
+                    _args,
                 )
                 result = CheckResult(
                     tool="wiki_file_pull",
@@ -1030,7 +1060,8 @@ print('hello')
             },
         }
         success, response, raw_result = await self._call_tool(
-            "milestone_create", _args,
+            "milestone_create",
+            _args,
         )
 
         result = CheckResult(
@@ -1050,9 +1081,11 @@ print('hello')
         if success:
             # Verify creation
             _verify_args = {"name": self.test_milestone}
-            verify_success, verify_response, _verify_raw = await self._call_tool(
-                "milestone_get", _verify_args
-            )
+            (
+                verify_success,
+                verify_response,
+                _verify_raw,
+            ) = await self._call_tool("milestone_get", _verify_args)
             result = CheckResult(
                 tool="milestone_create",
                 test_name="verify_creation",
@@ -1075,7 +1108,8 @@ print('hello')
                 },
             }
             success, response, raw_result = await self._call_tool(
-                "milestone_update", _args,
+                "milestone_update",
+                _args,
             )
             result = CheckResult(
                 tool="milestone_update",
@@ -1276,7 +1310,8 @@ print('hello')
         if self.test_batch_ticket_ids:
             _args = {"ticket_ids": self.test_batch_ticket_ids}
             success, response, raw_result = await self._call_tool(
-                "ticket_batch_delete", _args,
+                "ticket_batch_delete",
+                _args,
             )
             expected_count = len(self.test_batch_ticket_ids)
 
@@ -1468,9 +1503,7 @@ print('hello')
 
         # ticket_get - non-existent
         _args = {"ticket_id": 99999999}
-        _, response, _raw = await self._call_tool(
-            "ticket_get", _args
-        )
+        _, response, _raw = await self._call_tool("ticket_get", _args)
         result = CheckResult(
             tool="ticket_get",
             test_name="non_existent",
@@ -1505,7 +1538,8 @@ print('hello')
         # wiki_get - non-existent
         _args = {"page_name": "NonExistentPage_DoesNotExist_12345"}
         _, response, _raw = await self._call_tool(
-            "wiki_get", _args,
+            "wiki_get",
+            _args,
         )
         result = CheckResult(
             tool="wiki_get",
@@ -1541,7 +1575,8 @@ print('hello')
         # wiki_delete - non-existent
         _args = {"page_name": "NonExistentPage_ToDelete_12345"}
         _, response, _raw = await self._call_tool(
-            "wiki_delete", _args,
+            "wiki_delete",
+            _args,
         )
         result = CheckResult(
             tool="wiki_delete",
@@ -1660,7 +1695,11 @@ print('hello')
         """Generate Tool Catalog section showing what LLM sees at tool listing time."""
         tools_to_show = self.available_tools
         if self.tools_filter:
-            tools_to_show = [t for t in self.available_tools if t.name in self.tools_filter]
+            tools_to_show = [
+                t
+                for t in self.available_tools
+                if t.name in self.tools_filter
+            ]
 
         lines = [
             "## Tool Catalog (LLM Tool Presentation)",
@@ -1668,13 +1707,17 @@ print('hello')
             f"**Total tools registered:** {len(self.available_tools)}",
         ]
         if self.tools_filter:
-            lines.append(f"**Tools shown (filtered):** {len(tools_to_show)}")
-        lines.extend([
-            "",
-            "This section shows the exact tool definitions presented to the LLM/agent",
-            "via `list_tools()`. Each entry includes name, description, and full inputSchema.",
-            "",
-        ])
+            lines.append(
+                f"**Tools shown (filtered):** {len(tools_to_show)}"
+            )
+        lines.extend(
+            [
+                "",
+                "This section shows the exact tool definitions presented to the LLM/agent",
+                "via `list_tools()`. Each entry includes name, description, and full inputSchema.",
+                "",
+            ]
+        )
         for tool in tools_to_show:
             lines.append(f"### `{tool.name}`")
             lines.append("")
@@ -1880,42 +1923,91 @@ print('hello')
                 await self.test_system_tools()
 
             # Phase 2: Read operations
-            ticket_read_tools = {"ticket_search", "ticket_get", "ticket_changelog", "ticket_actions", "ticket_fields"}
-            if not self.tools_filter or self.tools_filter & ticket_read_tools:
+            ticket_read_tools = {
+                "ticket_search",
+                "ticket_get",
+                "ticket_changelog",
+                "ticket_actions",
+                "ticket_fields",
+            }
+            if (
+                not self.tools_filter
+                or self.tools_filter & ticket_read_tools
+            ):
                 await self.test_ticket_read_operations()
 
-            wiki_read_tools = {"wiki_get", "wiki_search", "wiki_recent_changes"}
-            if not self.tools_filter or self.tools_filter & wiki_read_tools:
+            wiki_read_tools = {
+                "wiki_get",
+                "wiki_search",
+                "wiki_recent_changes",
+            }
+            if (
+                not self.tools_filter
+                or self.tools_filter & wiki_read_tools
+            ):
                 await self.test_wiki_read_operations()
 
             milestone_read_tools = {"milestone_list", "milestone_get"}
-            if not self.tools_filter or self.tools_filter & milestone_read_tools:
+            if (
+                not self.tools_filter
+                or self.tools_filter & milestone_read_tools
+            ):
                 await self.test_milestone_read_operations()
 
             # Phase 3: Write operations
             ticket_write_tools = {"ticket_create", "ticket_update"}
-            if not self.tools_filter or self.tools_filter & ticket_write_tools:
+            if (
+                not self.tools_filter
+                or self.tools_filter & ticket_write_tools
+            ):
                 await self.test_ticket_write_operations()
 
             wiki_write_tools = {"wiki_create", "wiki_update"}
-            if not self.tools_filter or self.tools_filter & wiki_write_tools:
+            if (
+                not self.tools_filter
+                or self.tools_filter & wiki_write_tools
+            ):
                 await self.test_wiki_write_operations()
 
-            wiki_file_tools = {"wiki_file_detect_format", "wiki_file_push", "wiki_file_pull"}
-            if not self.tools_filter or self.tools_filter & wiki_file_tools:
+            wiki_file_tools = {
+                "wiki_file_detect_format",
+                "wiki_file_push",
+                "wiki_file_pull",
+            }
+            if (
+                not self.tools_filter
+                or self.tools_filter & wiki_file_tools
+            ):
                 await self.test_wiki_file_operations()
 
-            milestone_write_tools = {"milestone_create", "milestone_update"}
-            if not self.tools_filter or self.tools_filter & milestone_write_tools:
+            milestone_write_tools = {
+                "milestone_create",
+                "milestone_update",
+            }
+            if (
+                not self.tools_filter
+                or self.tools_filter & milestone_write_tools
+            ):
                 await self.test_milestone_write_operations()
 
-            batch_tools = {"ticket_batch_create", "ticket_batch_update", "ticket_batch_delete"}
+            batch_tools = {
+                "ticket_batch_create",
+                "ticket_batch_update",
+                "ticket_batch_delete",
+            }
             if not self.tools_filter or self.tools_filter & batch_tools:
                 await self.test_ticket_batch_operations()
 
             # Phase 4: Delete operations
-            delete_tools = {"wiki_delete", "milestone_delete", "ticket_delete"}
-            if not self.tools_filter or self.tools_filter & delete_tools:
+            delete_tools = {
+                "wiki_delete",
+                "milestone_delete",
+                "ticket_delete",
+            }
+            if (
+                not self.tools_filter
+                or self.tools_filter & delete_tools
+            ):
                 await self.test_delete_operations()
 
             # Phase 5: Error handling (tests multiple tools)
@@ -1999,7 +2091,9 @@ async def async_main(args):
     if args.insecure:
         server_args.append("--insecure")
     if args.permissions_file:
-        server_args.extend(["--permissions-file", args.permissions_file])
+        server_args.extend(
+            ["--permissions-file", args.permissions_file]
+        )
 
     server_params = StdioServerParameters(
         command=server_cmd,
@@ -2007,15 +2101,22 @@ async def async_main(args):
     )
 
     try:
-        async with stdio_client(server_params) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
+        async with stdio_client(server_params) as (
+            read_stream,
+            write_stream,
+        ):
+            async with ClientSession(
+                read_stream, write_stream
+            ) as session:
                 init_result = await session.initialize()
                 logger.info(
                     "MCP session initialized: server=%s version=%s",
                     init_result.serverInfo.name,
                     init_result.serverInfo.version,
                 )
-                print(f"Connected to MCP server: {init_result.serverInfo.name} v{init_result.serverInfo.version}")
+                print(
+                    f"Connected to MCP server: {init_result.serverInfo.name} v{init_result.serverInfo.version}"
+                )
 
                 tester = ComprehensiveMCPTester(
                     session=session,
@@ -2041,7 +2142,9 @@ async def async_main(args):
                     f"Total: {tester.report.total} | Passed: {tester.report.passed} | Failed: {tester.report.failed}"
                 )
                 if not success:
-                    print("\nSome tests failed. Check the report for details.")
+                    print(
+                        "\nSome tests failed. Check the report for details."
+                    )
 
                 return 0 if success else 1
 
@@ -2070,11 +2173,21 @@ Examples:
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {VERSION}"
     )
-    parser.add_argument("--url", help="Override Trac URL (passed to trac-mcp-server)")
-    parser.add_argument("--username", help="Override username (passed to trac-mcp-server)")
-    parser.add_argument("--password", help="Override password (passed to trac-mcp-server)")
     parser.add_argument(
-        "--insecure", action="store_true", help="Skip SSL verification (passed to trac-mcp-server)"
+        "--url", help="Override Trac URL (passed to trac-mcp-server)"
+    )
+    parser.add_argument(
+        "--username",
+        help="Override username (passed to trac-mcp-server)",
+    )
+    parser.add_argument(
+        "--password",
+        help="Override password (passed to trac-mcp-server)",
+    )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Skip SSL verification (passed to trac-mcp-server)",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Verbose output"
