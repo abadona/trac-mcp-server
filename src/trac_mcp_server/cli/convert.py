@@ -24,8 +24,8 @@ from ..converters.markdown_to_tracwiki import convert_with_warnings
 # Exit-code constants
 # ---------------------------------------------------------------------------
 EXIT_OK = 0
-EXIT_RUNTIME_ERROR = 1     # I/O, clipboard, mutual-exclusion
-EXIT_USAGE_ERROR = 2       # argparse default (not raised by us directly)
+EXIT_RUNTIME_ERROR = 1  # I/O, clipboard, mutual-exclusion
+EXIT_USAGE_ERROR = 2  # argparse default (not raised by us directly)
 EXIT_CONVERSION_ERROR = 3  # exception raised inside convert_text()
 
 
