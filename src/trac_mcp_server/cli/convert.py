@@ -144,6 +144,79 @@ def _fetch_wiki_page(page_name: str, args) -> tuple[str | None, int]:
     return text, EXIT_OK
 
 
+def _put_wiki_page(
+    page_name: str,
+    content: str,
+    comment: str,
+    args,
+) -> tuple[dict | None, int]:
+    """Write a TracWiki page's raw source via TracClient.put_wiki_page.
+
+    Reuses _build_trac_overrides() and bootstrap_config() so the same
+    layered config precedence (CLI > env > YAML > defaults) that
+    --check-trac and --from-wiki use also applies here.
+
+    Passes version=None -> create-or-update semantics (no optimistic
+    locking) per Phase 22 roadmap goal.
+
+    Returns (info, EXIT_OK) on success or (None, EXIT_TRAC) on any
+    failure. info is the dict returned by put_wiki_page:
+    {name, version, author, lastModified, url}. Never prints the
+    password.
+    """
+    import xmlrpc.client
+
+    import requests.exceptions
+
+    overrides = _build_trac_overrides(args)
+    if overrides is None:
+        return (
+            None,
+            EXIT_TRAC,
+        )  # password-file diagnostic already written
+
+    try:
+        config, _sources = bootstrap_config(overrides)
+    except ValueError:
+        sys.stderr.write(
+            "trac-convert: no Trac credentials found.\n"
+            "  Set env vars TRAC_URL, TRAC_USERNAME, TRAC_PASSWORD, or\n"
+            "  create .trac_mcp/config.yaml (see docs/reference/cli.md).\n"
+        )
+        return None, EXIT_TRAC
+
+    client = TracClient(config)
+    try:
+        info = client.put_wiki_page(page_name, content, comment)
+    except ValueError as e:
+        # put_wiki_page raises ValueError for: invalid page name,
+        # invalid content, "Page not modified (content identical)",
+        # and version conflicts. Conversion succeeded — the Trac
+        # write was rejected, so map to EXIT_TRAC (not
+        # EXIT_CONVERSION_ERROR).
+        sys.stderr.write(f"trac-convert: wiki write rejected: {e}\n")
+        return None, EXIT_TRAC
+    except xmlrpc.client.Fault as e:
+        sys.stderr.write(
+            f"trac-convert: Trac fault writing"
+            f" {page_name}: {e.faultString}\n"
+        )
+        return None, EXIT_TRAC
+    except requests.exceptions.SSLError as e:
+        sys.stderr.write(f"trac-convert: SSL error: {e}\n")
+        return None, EXIT_TRAC
+    except requests.exceptions.ConnectionError as e:
+        sys.stderr.write(
+            f"trac-convert: cannot reach Trac at {config.trac_url}: {e}\n"
+        )
+        return None, EXIT_TRAC
+    except Exception as e:
+        sys.stderr.write(f"trac-convert: wiki write failed: {e}\n")
+        return None, EXIT_TRAC
+
+    return info, EXIT_OK
+
+
 def _check_trac(args) -> int:
     """Resolve Trac config, ping server, report status.
 
@@ -434,10 +507,10 @@ def main(argv: list[str] | None = None) -> int:
 
     Reads from --from-wiki PAGE, --from-clipboard, positional FILE, or
     stdin (in that order of precedence), dispatches via convert_text(),
-    writes result.text verbatim to --to-clipboard, --output FILE, or
-    stdout (in that order of precedence), emits result.warnings to
-    stderr one line each prefixed with ``warning: ``, and returns an
-    integer exit code for ``sys.exit``.
+    writes result.text verbatim to --to-wiki PAGE, --to-clipboard,
+    --output FILE, or stdout (in that order of precedence), emits
+    result.warnings to stderr one line each prefixed with ``warning: ``,
+    and returns an integer exit code for ``sys.exit``.
 
     Exit codes:
     - 0 (EXIT_OK): success (including pass-through with no conversion).
@@ -449,8 +522,9 @@ def main(argv: list[str] | None = None) -> int:
     - 3 (EXIT_CONVERSION_ERROR): the converter raised an unexpected
       exception; a ``trac-convert: conversion failed: <reason>`` message
       is written to stderr (no traceback).
-    - 4 (EXIT_TRAC): Trac connectivity, auth, or fetch error from
-      --check-trac or --from-wiki.
+    - 4 (EXIT_TRAC): Trac connectivity, auth, or protocol error from
+      --check-trac, --from-wiki, or --to-wiki (including wiki write
+      rejections like "Page not modified" or "Version conflict").
 
     Note on direction-scoped flags: --heading-anchors only affects the
     md→tracwiki direction and is silently ignored for tracwiki→md (and
@@ -546,6 +620,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         text = sys.stdin.read()
 
+    # --- --to-wiki authoritatively knows the target is TracWiki;
+    # silently override --to (which may be None or 'md'). ---
+    if args.to_wiki is not None:
+        args.target_format = "tracwiki"
+
     # --- convert ---
     # Translate --heading-anchors on|off to bool before forwarding.
     heading_anchors_bool = args.heading_anchors == "on"
@@ -562,7 +641,18 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CONVERSION_ERROR
 
     # --- write output ---
-    if args.to_clipboard:
+    if args.to_wiki is not None:
+        info, write_rc = _put_wiki_page(
+            args.to_wiki, result.text, args.wiki_comment, args
+        )
+        if info is None:
+            return write_rc
+        if args.verbose:
+            sys.stderr.write(
+                f"info: wrote {len(result.text.encode('utf-8'))} bytes"
+                f" to wiki page {info['name']} (v{info['version']})\n"
+            )
+    elif args.to_clipboard:
         try:
             pyperclip.copy(result.text)
         except pyperclip.PyperclipException as e:
@@ -592,9 +682,10 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(
             f"info: read {len(text.encode('utf-8'))} bytes\n"
         )
-        sys.stderr.write(
-            f"info: wrote {len(result.text.encode('utf-8'))} bytes\n"
-        )
+        if args.to_wiki is None:
+            sys.stderr.write(
+                f"info: wrote {len(result.text.encode('utf-8'))} bytes\n"
+            )
 
     # --- warnings (emitted after write, preserving Phase 13 ordering) ---
     if not args.quiet:
