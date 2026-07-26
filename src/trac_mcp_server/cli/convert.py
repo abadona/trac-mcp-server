@@ -20,6 +20,14 @@ from ..converters import (
 from ..converters.common import ConversionResult
 from ..converters.markdown_to_tracwiki import convert_with_warnings
 
+# ---------------------------------------------------------------------------
+# Exit-code constants
+# ---------------------------------------------------------------------------
+EXIT_OK = 0
+EXIT_RUNTIME_ERROR = 1     # I/O, clipboard, mutual-exclusion
+EXIT_USAGE_ERROR = 2       # argparse default (not raised by us directly)
+EXIT_CONVERSION_ERROR = 3  # exception raised inside convert_text()
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build and return the argument parser.
@@ -164,17 +172,25 @@ def main(argv: list[str] | None = None) -> int:
     order of precedence), dispatches via convert_text(), writes
     result.text verbatim to --to-clipboard, --output FILE, or stdout
     (in that order of precedence), emits result.warnings to stderr one
-    line each prefixed with ``warning: ``, and returns 0 on success
-    (including pass-through).  Returns 1 on any I/O error with a
-    ``trac-convert: <what>: <reason>`` message to stderr.
+    line each prefixed with ``warning: ``, and returns an integer exit
+    code for ``sys.exit``.
+
+    Exit codes:
+    - 0 (EXIT_OK): success (including pass-through with no conversion).
+    - 1 (EXIT_RUNTIME_ERROR): I/O error, clipboard failure, or
+      mutual-exclusion violation; a ``trac-convert: <what>: <reason>``
+      message is written to stderr.
+    - 2 (EXIT_USAGE_ERROR): invalid flags or missing required argument;
+      raised internally by argparse (not by this function directly).
+    - 3 (EXIT_CONVERSION_ERROR): the converter raised an unexpected
+      exception; a ``trac-convert: conversion failed: <reason>`` message
+      is written to stderr (no traceback).
 
     Note on direction-scoped flags: --heading-anchors only affects the
     md→tracwiki direction and is silently ignored for tracwiki→md (and
     vice-versa for --unknown-macros).  This is intentional — --from auto
     may resolve either way at runtime, so mutual-exclusion checks are not
     applied.
-
-    Returns an integer exit code for ``sys.exit``.
     """
     args = build_parser().parse_args(argv)
 
@@ -184,13 +200,13 @@ def main(argv: list[str] | None = None) -> int:
             "trac-convert: --from-clipboard and FILE are"
             " mutually exclusive\n"
         )
-        return 1
+        return EXIT_RUNTIME_ERROR
     if args.to_clipboard and args.output_file is not None:
         sys.stderr.write(
             "trac-convert: --to-clipboard and --output are"
             " mutually exclusive\n"
         )
-        return 1
+        return EXIT_RUNTIME_ERROR
 
     # --- read input ---
     if args.from_clipboard:
@@ -200,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(
                 f"trac-convert: clipboard read failed: {e}\n"
             )
-            return 1
+            return EXIT_RUNTIME_ERROR
     elif args.input_file is not None:
         try:
             text = Path(args.input_file).read_text(encoding="utf-8")
@@ -209,20 +225,24 @@ def main(argv: list[str] | None = None) -> int:
                 f"trac-convert: cannot read input file:"
                 f" {args.input_file}: {e.strerror or e}\n"
             )
-            return 1
+            return EXIT_RUNTIME_ERROR
     else:
         text = sys.stdin.read()
 
     # --- convert ---
     # Translate --heading-anchors on|off to bool before forwarding.
     heading_anchors_bool = args.heading_anchors == "on"
-    result = convert_text(
-        text,
-        args.source_format,
-        args.target_format,
-        heading_anchors=heading_anchors_bool,
-        unknown_macros=args.unknown_macros,
-    )
+    try:
+        result = convert_text(
+            text,
+            args.source_format,
+            args.target_format,
+            heading_anchors=heading_anchors_bool,
+            unknown_macros=args.unknown_macros,
+        )
+    except Exception as e:
+        sys.stderr.write(f"trac-convert: conversion failed: {e}\n")
+        return EXIT_CONVERSION_ERROR
 
     # --- write output ---
     if args.to_clipboard:
@@ -232,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(
                 f"trac-convert: clipboard write failed: {e}\n"
             )
-            return 1
+            return EXIT_RUNTIME_ERROR
     elif args.output_file is not None:
         try:
             Path(args.output_file).write_text(
@@ -243,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"trac-convert: cannot write output file:"
                 f" {args.output_file}: {e.strerror or e}\n"
             )
-            return 1
+            return EXIT_RUNTIME_ERROR
     else:
         sys.stdout.write(result.text)
 
@@ -251,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
     for warning in result.warnings:
         sys.stderr.write(f"warning: {warning}\n")
 
-    return 0
+    return EXIT_OK
 
 
 def run() -> None:
