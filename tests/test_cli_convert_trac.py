@@ -102,7 +102,7 @@ def test_check_trac_success_prints_url_user_sources_and_exits_ok(
     mock_instance = _mock_tracclient(validate_return="1.2.0")
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.TracClient",
-        lambda cfg: mock_instance,
+        lambda _: mock_instance,
     )
 
     result = main(["--check-trac"])
@@ -127,7 +127,7 @@ def test_check_trac_success_never_prints_password(monkeypatch, capsys):
     mock_instance = _mock_tracclient(validate_return="1.2.0")
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.TracClient",
-        lambda cfg: mock_instance,
+        lambda _: mock_instance,
     )
 
     main(["--check-trac"])
@@ -146,7 +146,7 @@ def test_check_trac_shows_insecure_warning_when_config_insecure(
     mock_instance = _mock_tracclient(validate_return="1.2.0")
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.TracClient",
-        lambda cfg: mock_instance,
+        lambda _: mock_instance,
     )
 
     result = main(["--check-trac"])
@@ -201,7 +201,7 @@ def test_check_trac_ping_auth_fault_classified(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.TracClient",
-        lambda cfg: mock_instance,
+        lambda _: mock_instance,
     )
 
     result = main(["--check-trac"])
@@ -220,7 +220,7 @@ def test_check_trac_ping_ssl_error_classified(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.TracClient",
-        lambda cfg: mock_instance,
+        lambda _: mock_instance,
     )
 
     result = main(["--check-trac"])
@@ -242,7 +242,7 @@ def test_check_trac_ping_connection_error_classified(
     )
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.TracClient",
-        lambda cfg: mock_instance,
+        lambda _: mock_instance,
     )
 
     result = main(["--check-trac"])
@@ -258,9 +258,7 @@ def test_check_trac_ping_connection_error_classified(
 # ---------------------------------------------------------------------------
 
 
-def test_password_file_precedes_password_flag(
-    monkeypatch, tmp_path, capsys
-):
+def test_password_file_precedes_password_flag(monkeypatch, tmp_path):
     """--trac-password-file takes precedence over --trac-password."""
     pw_file = tmp_path / "pw.txt"
     pw_file.write_text("filepass\n", encoding="utf-8")
@@ -313,13 +311,13 @@ def test_password_file_read_failure_exits_4(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_check_trac_does_not_require_to_flag(monkeypatch, capsys):
+def test_check_trac_does_not_require_to_flag(monkeypatch):
     """--check-trac works without --to (dispatch happens before --to check)."""
     _mock_valid_env(monkeypatch)
     mock_instance = _mock_tracclient(validate_return="1.2.0")
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.TracClient",
-        lambda cfg: mock_instance,
+        lambda _: mock_instance,
     )
 
     result = main(["--check-trac"])  # no --to
