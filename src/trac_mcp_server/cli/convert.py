@@ -117,6 +117,14 @@ def build_parser() -> argparse.ArgumentParser:
             " Default: bracket."
         ),
     )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        dest="quiet",
+        action="store_true",
+        default=False,
+        help="Suppress warning: lines on stderr. Errors still shown.",
+    )
     return parser
 
 
@@ -268,8 +276,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(result.text)
 
     # --- warnings (emitted after write, preserving Phase 13 ordering) ---
-    for warning in result.warnings:
-        sys.stderr.write(f"warning: {warning}\n")
+    if not args.quiet:
+        for warning in result.warnings:
+            sys.stderr.write(f"warning: {warning}\n")
 
     return EXIT_OK
 
