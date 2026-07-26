@@ -1511,6 +1511,64 @@ class TestHeadingExplicitAnchor(unittest.TestCase):
         self.assertNotIn("#", result.replace("== ... ==", ""))
 
 
+class TestHeadingAnchorsOption(unittest.TestCase):
+    """Tests for the heading_anchors kwarg added in Phase 16.
+
+    Verifies that the default True preserves existing anchor behavior
+    and that False omits slugs without touching any other output.
+    """
+
+    def test_default_emits_anchor(self):
+        """heading_anchors=True (default) matches current slug behavior."""
+        result = markdown_to_tracwiki("# Hello")
+        self.assertEqual(result, "= Hello = #hello")
+
+    def test_off_omits_anchor(self):
+        """heading_anchors=False emits plain heading with no slug suffix."""
+        result = markdown_to_tracwiki("# Hello", heading_anchors=False)
+        self.assertEqual(result, "= Hello =")
+
+    def test_off_omits_anchor_h2(self):
+        """heading_anchors=False works for H2."""
+        result = markdown_to_tracwiki(
+            "## Section", heading_anchors=False
+        )
+        self.assertEqual(result, "== Section ==")
+
+    def test_off_omits_anchor_h3(self):
+        """heading_anchors=False works for H3."""
+        result = markdown_to_tracwiki("### Sub", heading_anchors=False)
+        self.assertEqual(result, "=== Sub ===")
+
+    def test_off_omits_anchor_multi_level(self):
+        """heading_anchors=False applies to all heading levels in one doc."""
+        source = "# Top\n\n## Middle\n\n### Bottom\n"
+        result = markdown_to_tracwiki(source, heading_anchors=False)
+        self.assertIn("= Top =", result)
+        self.assertIn("== Middle ==", result)
+        self.assertIn("=== Bottom ===", result)
+        self.assertNotIn("#top", result)
+        self.assertNotIn("#middle", result)
+        self.assertNotIn("#bottom", result)
+
+    def test_convert_with_warnings_forwards_option(self):
+        """convert_with_warnings forwards heading_anchors=False correctly."""
+        from trac_mcp_server.converters.markdown_to_tracwiki import (
+            convert_with_warnings,
+        )
+
+        result = convert_with_warnings("# X", heading_anchors=False)
+        self.assertEqual(result.text, "= X =")
+
+    def test_on_matches_default(self):
+        """Explicit heading_anchors=True produces identical output to the default."""
+        default = markdown_to_tracwiki("## Overview")
+        explicit = markdown_to_tracwiki(
+            "## Overview", heading_anchors=True
+        )
+        self.assertEqual(default, explicit)
+
+
 class TestDetectFormatHeuristicFenceAware(unittest.TestCase):
     """Tests for detect_format_heuristic() — fence redaction + line-anchored heading match.
 

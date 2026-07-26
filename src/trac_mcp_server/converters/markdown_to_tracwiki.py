@@ -44,9 +44,18 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
     NAME = "tracwiki"
 
-    def __init__(self):
-        """Initialize renderer with state tracking for table rendering."""
+    def __init__(self, heading_anchors: bool = True):
+        """Initialize renderer with state tracking for table rendering.
+
+        Args:
+            heading_anchors: When True (default), emit an explicit ``#slug``
+                anchor on each heading so Markdown-source cross-references
+                resolve after conversion.  When False, omit the anchor and
+                emit plain ``= Heading =`` syntax (controlled by the
+                ``--heading-anchors off`` CLI flag).
+        """
         super().__init__()
+        self._heading_anchors = heading_anchors
         # Track column alignments for current table
         self._table_alignments: list[str | None] = []
 
@@ -94,8 +103,16 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
         If the heading text slugifies to empty (e.g. punctuation-only),
         the explicit anchor is omitted and Trac's default id applies.
+
+        When ``self._heading_anchors`` is False (set via ``--heading-anchors
+        off`` on the CLI), the slug computation is skipped entirely and plain
+        ``= Heading =`` syntax is emitted — useful when the caller does not
+        need Markdown cross-reference compatibility.
         """
         marker = "=" * level
+        # --heading-anchors off: skip slug computation, emit plain heading.
+        if not self._heading_anchors:
+            return f"{marker} {text} {marker}\n"
         slug = _heading_slug(text)
         if slug:
             return f"{marker} {text} {marker} #{slug}\n"
@@ -440,18 +457,24 @@ class TracWikiRenderer(mistune.BaseRenderer):
                     return func(text)
 
 
-def markdown_to_tracwiki(markdown_text: str) -> str:
+def markdown_to_tracwiki(
+    markdown_text: str, *, heading_anchors: bool = True
+) -> str:
     """
     Convert Markdown text to TracWiki format.
 
     Args:
         markdown_text: Markdown formatted text
+        heading_anchors: When True (default), each heading includes an
+            explicit ``#slug`` anchor for Markdown cross-reference
+            compatibility.  Pass ``False`` to emit plain headings without
+            anchors (mirrors ``--heading-anchors off`` on the CLI).
 
     Returns:
         TracWiki formatted text
     """
     # Create renderer and parser with table plugin enabled
-    renderer = TracWikiRenderer()
+    renderer = TracWikiRenderer(heading_anchors=heading_anchors)
     markdown = mistune.create_markdown(
         renderer=renderer, plugins=["table"]
     )
@@ -466,12 +489,17 @@ def markdown_to_tracwiki(markdown_text: str) -> str:
     return result
 
 
-def convert_with_warnings(markdown_text: str) -> ConversionResult:
+def convert_with_warnings(
+    markdown_text: str, *, heading_anchors: bool = True
+) -> ConversionResult:
     """
     Convert Markdown to TracWiki and detect unsupported features.
 
     Args:
         markdown_text: Markdown formatted text
+        heading_anchors: Forwarded to :func:`markdown_to_tracwiki`.  When
+            True (default), headings include an explicit ``#slug`` anchor.
+            Pass ``False`` for plain headings (``--heading-anchors off``).
 
     Returns:
         ConversionResult with TracWiki text and any warnings
@@ -493,7 +521,9 @@ def convert_with_warnings(markdown_text: str) -> ConversionResult:
         )
 
     # Convert the markdown
-    tracwiki = markdown_to_tracwiki(markdown_text)
+    tracwiki = markdown_to_tracwiki(
+        markdown_text, heading_anchors=heading_anchors
+    )
 
     return ConversionResult(
         text=tracwiki,
