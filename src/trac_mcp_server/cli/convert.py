@@ -14,12 +14,14 @@ from pathlib import Path
 import pyperclip
 
 from .. import __version__
+from ..config_bootstrap import bootstrap_config
 from ..converters import (
     detect_format_heuristic,
     tracwiki_to_markdown,
 )
 from ..converters.common import ConversionResult
 from ..converters.markdown_to_tracwiki import convert_with_warnings
+from ..core.client import TracClient
 
 # ---------------------------------------------------------------------------
 # Exit-code constants
@@ -80,9 +82,8 @@ def _build_trac_overrides(args) -> dict:
 def _check_trac(args) -> int:
     """Resolve Trac config, ping server, report status.
 
-    Imports are deferred to keep module import-time cost off the
-    pure-conversion path (no TracClient or bootstrap overhead for
-    conversions that don't need Trac).
+    Uses module-level TracClient and bootstrap_config imports so that
+    tests can monkeypatch trac_mcp_server.cli.convert.TracClient.
 
     Returns EXIT_OK (0) on successful ping, EXIT_TRAC (4) on any failure.
     Password is NEVER written to stdout or stderr.
@@ -90,9 +91,6 @@ def _check_trac(args) -> int:
     import xmlrpc.client
 
     import requests.exceptions
-
-    from ..config_bootstrap import bootstrap_config
-    from ..core.client import TracClient
 
     overrides = _build_trac_overrides(args)
     if overrides is None:
