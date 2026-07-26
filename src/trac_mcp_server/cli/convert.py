@@ -90,15 +90,20 @@ def convert_text(
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run the CLI.
 
+    Reads all of stdin, dispatches via convert_text(), writes
+    result.text verbatim to stdout (no added newline), emits
+    result.warnings to stderr one line each prefixed with
+    ``warning: ``, and returns 0 on success (including pass-through).
+
     Returns an integer exit code for ``sys.exit``.
     """
-    build_parser().parse_args(argv)
-    print(
-        "trac-convert: conversion not yet implemented"
-        " (Phase 11 scaffold)",
-        file=sys.stderr,
-    )
-    return 2
+    args = build_parser().parse_args(argv)
+    text = sys.stdin.read()
+    result = convert_text(text, args.source_format, args.target_format)
+    sys.stdout.write(result.text)
+    for warning in result.warnings:
+        sys.stderr.write(f"warning: {warning}\n")
+    return 0
 
 
 def run() -> None:
