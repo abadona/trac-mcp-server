@@ -48,4 +48,58 @@ The `trac-mcp-server` command is registered as an entry point in `pyproject.toml
 
 ---
 
+## trac-convert
+
+The `trac-convert` command is a standalone binary that converts between TracWiki and Markdown formats. Unlike `trac-mcp-server`, it is designed for interactive shell use and Unix pipe composition — no Trac connection required.
+
+### Usage
+
+```bash
+trac-convert --from md --to tracwiki < input.md > output.tw     # stdin → stdout
+trac-convert --to tracwiki input.md -o output.tw                 # file → file
+trac-convert --from-clipboard --to md                            # clipboard → stdout
+trac-convert --to-clipboard input.md                             # file → clipboard
+trac-convert --version
+```
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--from {md,tracwiki,auto}` | `auto` | Source format; `auto` sniffs the input via heuristics |
+| `--to {md,tracwiki}` | *(required)* | Destination format |
+| `FILE` (positional) | stdin | Input file path; omit or use `-` for stdin |
+| `-o, --output FILE` | stdout | Output file path; omit for stdout |
+| `--from-clipboard` | -- | Read input from system clipboard instead of stdin/file (requires pyperclip) |
+| `--to-clipboard` | -- | Write output to system clipboard instead of stdout/file |
+| `--heading-anchors {on,off}` | `on` | md→tracwiki only: emit explicit `#slug` anchors on TracWiki headings (silently ignored in tw→md direction) |
+| `--unknown-macros {bracket,preserve,drop}` | `bracket` | tw→md only: how to render unknown TracWiki macros — `bracket` = `[MACRO: Name]`, `preserve` = leave `[[Name]]` literal, `drop` = omit (silently ignored in md→tw direction) |
+| `-v, --verbose` | -- | Emit `info:` diagnostics to stderr (mutually exclusive with `-q`) |
+| `-q, --quiet` | -- | Suppress `warning:` lines to stderr (mutually exclusive with `-v`; does NOT suppress `error:` lines) |
+| `--version` | -- | Show version and exit |
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Runtime error (I/O failure, clipboard unavailable, mutually-exclusive flag conflict) |
+| `2` | Usage error (argparse-emitted: missing required flag, bad choice) |
+| `3` | Conversion error (exception raised inside the converter) |
+
+### Auto-detection
+
+When `--from auto` is used (the default when omitted), the format is detected via `converters.common.detect_format`: TracWiki markers (`{{{`, `[[`, `= Heading =`) win, otherwise Markdown is assumed. On ambiguous input, prefer the explicit `--from` flag.
+
+### Installation
+
+```bash
+pip install .          # installs BOTH trac-mcp-server and trac-convert
+pipx install .         # alternative: isolated environment, both binaries available
+```
+
+Both entry points are registered in `pyproject.toml` under `[project.scripts]`.
+
+---
+
 [Back to Reference Overview](overview.md)
