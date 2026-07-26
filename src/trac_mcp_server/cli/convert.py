@@ -4,6 +4,7 @@ This module is the Phase 11 scaffold for the ``trac-convert`` binary.
 Phases 12-17 layer format flags, I/O modes, stdin/stdout wiring,
 file I/O, clipboard I/O, converter options, error handling, and
 verbosity flags (--quiet, --verbose) on top of this skeleton.
+# Phase 20 adds Trac wiring: --trac-* flags, --check-trac, EXIT_TRAC.
 """
 
 import argparse
@@ -27,6 +28,118 @@ EXIT_OK = 0
 EXIT_RUNTIME_ERROR = 1  # I/O, clipboard, mutual-exclusion
 EXIT_USAGE_ERROR = 2  # argparse default (not raised by us directly)
 EXIT_CONVERSION_ERROR = 3  # exception raised inside convert_text()
+EXIT_TRAC = 4  # Trac client errors (auth, network, protocol) — used by --check-trac and Phases 21-23
+
+
+# ---------------------------------------------------------------------------
+# Trac helpers (Phase 20)
+# ---------------------------------------------------------------------------
+
+def _read_password_file(path: str) -> str | None:
+    """Read password from a file (single line, trimmed).
+
+    Returns the stripped contents on success, or None on failure (after
+    writing a diagnostic message to stderr).
+    """
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError as e:
+        sys.stderr.write(
+            f"trac-convert: cannot read --trac-password-file:"
+            f" {path}: {e.strerror or e}\n"
+        )
+        return None
+
+
+def _build_trac_overrides(args) -> dict:
+    """Build the cli_overrides dict for bootstrap_config() from parsed args.
+
+    Only includes non-None values so bootstrap_config's 'if overrides:'
+    check works correctly (an empty dict means no CLI overrides).
+    Password-file takes precedence over --trac-password flag.
+    Returns the filtered dict, or None if password-file read failed.
+    """
+    overrides: dict = {}
+    if args.trac_url is not None:
+        overrides["url"] = args.trac_url
+    if args.trac_username is not None:
+        overrides["username"] = args.trac_username
+
+    if args.trac_password_file is not None:
+        # File takes precedence; returns None on read failure (signal to caller)
+        password = _read_password_file(args.trac_password_file)
+        if password is None:
+            return None  # type: ignore[return-value]  # caller checks for None
+        overrides["password"] = password
+    elif args.trac_password is not None:
+        overrides["password"] = args.trac_password
+
+    return overrides
+
+
+def _check_trac(args) -> int:
+    """Resolve Trac config, ping server, report status.
+
+    Imports are deferred to keep module import-time cost off the
+    pure-conversion path (no TracClient or bootstrap overhead for
+    conversions that don't need Trac).
+
+    Returns EXIT_OK (0) on successful ping, EXIT_TRAC (4) on any failure.
+    Password is NEVER written to stdout or stderr.
+    """
+    import xmlrpc.client
+
+    import requests.exceptions
+
+    from ..config_bootstrap import bootstrap_config
+    from ..core.client import TracClient
+
+    overrides = _build_trac_overrides(args)
+    if overrides is None:
+        # Password-file read failure already reported to stderr
+        return EXIT_TRAC
+
+    try:
+        config, sources = bootstrap_config(overrides)
+    except ValueError:
+        sys.stderr.write(
+            "trac-convert: no Trac credentials found.\n"
+            "  Set env vars TRAC_URL, TRAC_USERNAME, TRAC_PASSWORD, or\n"
+            "  create .trac_mcp/config.yaml (see docs/reference/cli.md).\n"
+        )
+        return EXIT_TRAC
+
+    sys.stdout.write(f"URL:      {config.trac_url}\n")
+    sys.stdout.write(f"Username: {config.username}\n")
+    sys.stdout.write(f"Sources:  {', '.join(sources)}\n")
+    if config.insecure:
+        sys.stdout.write("SSL:      verification DISABLED\n")
+
+    client = TracClient(config)
+    try:
+        version = client.validate_connection()
+    except xmlrpc.client.Fault as e:
+        sys.stderr.write(
+            f"trac-convert: authentication failed: {e.faultString}\n"
+        )
+        return EXIT_TRAC
+    except requests.exceptions.SSLError as e:
+        sys.stderr.write(
+            f"trac-convert: SSL error (consider --trac-* with insecure"
+            f" config or fix cert): {e}\n"
+        )
+        return EXIT_TRAC
+    except requests.exceptions.ConnectionError as e:
+        sys.stderr.write(
+            f"trac-convert: cannot reach Trac at {config.trac_url}: {e}\n"
+        )
+        return EXIT_TRAC
+    except Exception as e:
+        sys.stderr.write(f"trac-convert: Trac ping failed: {e}\n")
+        return EXIT_TRAC
+
+    sys.stdout.write(f"OK (Trac API version {version})\n")
+    return EXIT_OK
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,8 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--to",
         dest="target_format",
         choices=("md", "tracwiki"),
-        required=True,
-        help="Target format. Required.",
+        default=None,
+        help="Target format. Required for conversion (not needed with --check-trac).",
     )
     parser.add_argument(
         "input_file",
@@ -115,6 +228,47 @@ def build_parser() -> argparse.ArgumentParser:
             " (tracwiki → md only). bracket = [MACRO: Name],"
             " preserve = leave [[Name]] literal, drop = omit."
             " Default: bracket."
+        ),
+    )
+    parser.add_argument(
+        "--trac-url",
+        dest="trac_url",
+        default=None,
+        help="Override Trac URL (default: TRAC_URL env or YAML).",
+    )
+    parser.add_argument(
+        "--trac-username",
+        dest="trac_username",
+        default=None,
+        help="Override Trac username (default: TRAC_USERNAME env or YAML).",
+    )
+    parser.add_argument(
+        "--trac-password",
+        dest="trac_password",
+        default=None,
+        help=(
+            "Override Trac password (default: TRAC_PASSWORD env or YAML). "
+            "Prefer --trac-password-file for secrets."
+        ),
+    )
+    parser.add_argument(
+        "--trac-password-file",
+        dest="trac_password_file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Read Trac password from file (single line, trimmed). "
+            "Takes precedence over --trac-password."
+        ),
+    )
+    parser.add_argument(
+        "--check-trac",
+        dest="check_trac",
+        action="store_true",
+        default=False,
+        help=(
+            "Print resolved Trac config source per field, ping the server, "
+            "and exit (no conversion performed)."
         ),
     )
     verbosity = parser.add_mutually_exclusive_group()
@@ -202,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     - 3 (EXIT_CONVERSION_ERROR): the converter raised an unexpected
       exception; a ``trac-convert: conversion failed: <reason>`` message
       is written to stderr (no traceback).
+    - 4 (EXIT_TRAC): Trac connectivity or auth error from --check-trac.
 
     Note on direction-scoped flags: --heading-anchors only affects the
     md→tracwiki direction and is silently ignored for tracwiki→md (and
@@ -215,6 +370,15 @@ def main(argv: list[str] | None = None) -> int:
     mutually exclusive via argparse add_mutually_exclusive_group().
     """
     args = build_parser().parse_args(argv)
+
+    # --- --check-trac: early dispatch before conversion validation ---
+    if args.check_trac:
+        return _check_trac(args)
+
+    # --- --to is required for conversion (not for --check-trac) ---
+    if args.target_format is None:
+        sys.stderr.write("trac-convert: --to is required\n")
+        return EXIT_USAGE_ERROR
 
     # --- mutual exclusion validation ---
     if args.from_clipboard and args.input_file is not None:
