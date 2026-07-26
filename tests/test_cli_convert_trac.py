@@ -33,13 +33,18 @@ def _mock_valid_env(monkeypatch):
 
 
 def _mock_tracclient(
-    validate_return="1.2.0", validate_side_effect=None
+    validate_return="1.2.0",
+    validate_side_effect=None,
+    get_wiki_page_return=None,
+    get_wiki_page_side_effect=None,
 ):
     """Return a MagicMock(spec=TracClient) with configurable validate_connection.
 
     Args:
         validate_return: The value validate_connection() should return on success.
         validate_side_effect: If set, validate_connection() raises this instead.
+        get_wiki_page_return: The value get_wiki_page() should return.
+        get_wiki_page_side_effect: If set, get_wiki_page() raises this instead.
     """
     mock_client_instance = MagicMock(spec=TracClient)
     if validate_side_effect is not None:
@@ -49,6 +54,14 @@ def _mock_tracclient(
     else:
         mock_client_instance.validate_connection.return_value = (
             validate_return
+        )
+    if get_wiki_page_side_effect is not None:
+        mock_client_instance.get_wiki_page.side_effect = (
+            get_wiki_page_side_effect
+        )
+    elif get_wiki_page_return is not None:
+        mock_client_instance.get_wiki_page.return_value = (
+            get_wiki_page_return
         )
     return mock_client_instance
 
@@ -71,16 +84,17 @@ def test_help_shows_all_five_trac_flags(capsys):
     assert "--check-trac" in out
 
 
-def test_help_does_not_show_from_wiki_or_to_wiki(capsys):
-    """REGRESSION GUARD: --from-wiki and --to-wiki must NOT appear in --help.
+def test_help_shows_from_wiki_but_not_to_wiki(capsys):
+    """REGRESSION GUARD: --from-wiki must appear in --help; --to-wiki must NOT.
 
-    This test protects against accidentally shipping Phase 21/22 scaffolding
-    during Phase 20. Update (do not delete) this test when those phases land.
+    This test protects against accidentally shipping Phase 22 (--to-wiki)
+    scaffolding before that phase lands. Update (do not delete) this test
+    when Phase 22 ships.
     """
     with pytest.raises(SystemExit):
         main(["--help"])
     out = capsys.readouterr().out
-    assert "--from-wiki" not in out
+    assert "--from-wiki" in out
     assert "--to-wiki" not in out
 
 
@@ -332,3 +346,281 @@ def test_normal_conversion_still_requires_to_flag(capsys):
     assert result == EXIT_USAGE_ERROR
     err = capsys.readouterr().err
     assert "--to" in err
+
+
+# ---------------------------------------------------------------------------
+# --- Phase 21: --from-wiki tests ---
+# ---------------------------------------------------------------------------
+
+
+def test_help_shows_from_wiki_page_metavar(capsys):
+    """--from-wiki entry in --help shows PAGE as the metavar."""
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    out = capsys.readouterr().out
+    assert "PAGE" in out
+
+
+def test_from_wiki_mutex_with_positional_file_exits_1_runtime_error(
+    capsys,
+):
+    """--from-wiki and FILE positional are mutually exclusive (exit 1)."""
+    from trac_mcp_server.cli.convert import EXIT_RUNTIME_ERROR
+
+    result = main(["--from-wiki", "Foo", "somefile.md", "--to", "md"])
+
+    assert result == EXIT_RUNTIME_ERROR
+    err = capsys.readouterr().err
+    assert "--from-wiki and FILE are mutually exclusive" in err
+
+
+def test_from_wiki_mutex_with_from_clipboard_exits_1_runtime_error(
+    capsys,
+):
+    """--from-wiki and --from-clipboard are mutually exclusive (exit 1)."""
+    from trac_mcp_server.cli.convert import EXIT_RUNTIME_ERROR
+
+    result = main(
+        ["--from-wiki", "Foo", "--from-clipboard", "--to", "md"]
+    )
+
+    assert result == EXIT_RUNTIME_ERROR
+    err = capsys.readouterr().err
+    assert (
+        "--from-wiki and --from-clipboard are mutually exclusive" in err
+    )
+
+
+def test_from_wiki_happy_path_prints_converted_markdown_to_stdout(
+    monkeypatch, capsys
+):
+    """--from-wiki fetches TracWiki, converts to Markdown, prints to stdout."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_return="= Heading =\n\nsome tracwiki body"
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--from-wiki", "MyPage", "--to", "md"])
+
+    assert result == EXIT_OK
+    out = capsys.readouterr().out
+    assert out.startswith("# Heading")
+
+
+def test_from_wiki_to_tracwiki_is_passthrough_no_conversion(
+    monkeypatch, capsys
+):
+    """--from-wiki + --to tracwiki is a pass-through (source == target)."""
+    raw_page = "= Heading =\n\nsome tracwiki body"
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(get_wiki_page_return=raw_page)
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--from-wiki", "MyPage", "--to", "tracwiki"])
+
+    assert result == EXIT_OK
+    out = capsys.readouterr().out
+    assert out == raw_page
+
+
+def test_from_wiki_silently_overrides_explicit_from_md(
+    monkeypatch, capsys
+):
+    """--from-wiki forces source_format=tracwiki, silently ignoring --from md."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_return="= Heading =\n\nbody"
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    # --from md is explicitly set but should be silently overridden
+    result = main(
+        ["--from-wiki", "MyPage", "--from", "md", "--to", "md"]
+    )
+
+    assert result == EXIT_OK
+    out = capsys.readouterr().out
+    # If --from md were honoured, tracwiki "= Heading =" would be treated
+    # as markdown and output "= Heading =" verbatim (passthrough or literal).
+    # With override to tracwiki→md, it must become "# Heading".
+    assert "# Heading" in out
+
+
+def test_from_wiki_auth_missing_prints_friendly_error_and_exits_4(
+    monkeypatch, tmp_path, capsys
+):
+    """No Trac credentials: friendly error, exit 4, no Traceback."""
+    for var in (
+        "TRAC_URL",
+        "TRAC_USERNAME",
+        "TRAC_PASSWORD",
+        "TRAC_MCP_CONFIG",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "trac_mcp_server.config_bootstrap.load_dotenv",
+        lambda: None,
+    )
+
+    result = main(["--from-wiki", "MyPage", "--to", "md"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "no Trac credentials found" in err
+    assert "docs/reference/cli.md" in err
+    assert "Traceback" not in err
+
+
+def test_from_wiki_page_not_found_prints_friendly_error_and_exits_4(
+    monkeypatch, capsys
+):
+    """Fault(1) -> 'wiki page not found: <page name>'."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_side_effect=xmlrpc.client.Fault(
+            1, "page not found"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--from-wiki", "NoSuchPage", "--to", "md"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "wiki page not found: NoSuchPage" in err
+
+
+def test_from_wiki_other_fault_reports_fault_string_and_exits_4(
+    monkeypatch, capsys
+):
+    """Fault(403) -> 'Trac fault' message with the faultString."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_side_effect=xmlrpc.client.Fault(
+            403, "permission denied"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--from-wiki", "SomePage", "--to", "md"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "Trac fault" in err
+    assert "permission denied" in err
+    assert "wiki page not found" not in err
+
+
+def test_from_wiki_connection_error_reports_reach_and_exits_4(
+    monkeypatch, capsys
+):
+    """ConnectionError -> 'cannot reach Trac at <url>' message."""
+    import requests.exceptions
+
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_side_effect=requests.exceptions.ConnectionError(
+            "connection refused"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--from-wiki", "SomePage", "--to", "md"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "cannot reach Trac at" in err
+    assert _TEST_URL in err
+
+
+def test_from_wiki_ssl_error_reports_ssl_and_exits_4(
+    monkeypatch, capsys
+):
+    """SSLError -> 'SSL error' message."""
+    import requests.exceptions
+
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_side_effect=requests.exceptions.SSLError(
+            "bad cert"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--from-wiki", "SomePage", "--to", "md"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "SSL error" in err
+
+
+def test_from_wiki_password_never_printed(monkeypatch, capsys):
+    """CRITICAL: password must never appear in stdout or stderr."""
+    secret = "s3cret_XY!zz"
+    monkeypatch.setenv("TRAC_URL", _TEST_URL)
+    monkeypatch.setenv("TRAC_USERNAME", _TEST_USER)
+    monkeypatch.setenv("TRAC_PASSWORD", secret)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_return="= Heading =\n\nbody"
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    main(["--from-wiki", "MyPage", "--to", "md"])
+
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+
+
+def test_from_wiki_output_to_clipboard_writes_converted_text(
+    monkeypatch, capsys
+):
+    """--from-wiki + --to-clipboard writes converted markdown to clipboard."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_return="= Heading =\n\nbody"
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    clipboard_calls = []
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.pyperclip.copy",
+        lambda text: clipboard_calls.append(text),
+    )
+
+    result = main(
+        ["--from-wiki", "MyPage", "--to", "md", "--to-clipboard"]
+    )
+
+    assert result == EXIT_OK
+    assert len(clipboard_calls) == 1
+    assert clipboard_calls[0].startswith("# Heading")
