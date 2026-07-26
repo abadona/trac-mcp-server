@@ -2,8 +2,8 @@
 
 This module is the Phase 11 scaffold for the ``trac-convert`` binary.
 Phases 12-17 layer format flags, I/O modes, stdin/stdout wiring,
-file I/O, clipboard I/O, converter options, and error handling
-on top of this skeleton.
+file I/O, clipboard I/O, converter options, error handling, and
+verbosity flags (--quiet, --verbose) on top of this skeleton.
 """
 
 import argparse
@@ -117,13 +117,22 @@ def build_parser() -> argparse.ArgumentParser:
             " Default: bracket."
         ),
     )
-    parser.add_argument(
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument(
         "-q",
         "--quiet",
         dest="quiet",
         action="store_true",
         default=False,
         help="Suppress warning: lines on stderr. Errors still shown.",
+    )
+    verbosity.add_argument(
+        "-v",
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        default=False,
+        help="Emit info: diagnostic lines to stderr.",
     )
     return parser
 
@@ -199,6 +208,11 @@ def main(argv: list[str] | None = None) -> int:
     vice-versa for --unknown-macros).  This is intentional — --from auto
     may resolve either way at runtime, so mutual-exclusion checks are not
     applied.
+
+    Note on verbosity flags: --quiet suppresses warning: lines (but not
+    trac-convert: errors). --verbose emits info: diagnostic lines (source
+    format, byte counts) to stderr before warnings. The two flags are
+    mutually exclusive via argparse add_mutually_exclusive_group().
     """
     args = build_parser().parse_args(argv)
 
@@ -274,6 +288,18 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_RUNTIME_ERROR
     else:
         sys.stdout.write(result.text)
+
+    # --- verbose diagnostics (emitted before warnings) ---
+    if args.verbose:
+        sys.stderr.write(
+            f"info: source format: {result.source_format}\n"
+        )
+        sys.stderr.write(
+            f"info: read {len(text.encode('utf-8'))} bytes\n"
+        )
+        sys.stderr.write(
+            f"info: wrote {len(result.text.encode('utf-8'))} bytes\n"
+        )
 
     # --- warnings (emitted after write, preserving Phase 13 ordering) ---
     if not args.quiet:
