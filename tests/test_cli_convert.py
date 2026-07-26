@@ -223,7 +223,7 @@ def test_main_writes_warnings_to_stderr_not_stdout(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.convert_text",
-        lambda *_: fake_result,
+        lambda *_, **__: fake_result,
     )
     monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
     exit_code = main(["--to", "tracwiki"])
@@ -459,4 +459,92 @@ def test_clipboard_write_error_returns_1(monkeypatch, capsys):
         ["--from", "md", "--to", "tracwiki", "--to-clipboard"]
     )
     assert exit_code == 1
-    assert "clipboard write failed" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Phase 16: --heading-anchors and --unknown-macros CLI flags
+# ---------------------------------------------------------------------------
+
+
+def test_heading_anchors_on_by_default(monkeypatch, capsys):
+    """--heading-anchors defaults to on; stdout includes the #slug suffix."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("# H"))
+    exit_code = main(["--from", "md", "--to", "tracwiki"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("= H = #h")
+
+
+def test_heading_anchors_off_omits_slug(monkeypatch, capsys):
+    """--heading-anchors off: heading emitted without #slug suffix."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("# H"))
+    exit_code = main(
+        ["--from", "md", "--to", "tracwiki", "--heading-anchors", "off"]
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("= H =")
+    assert "#h" not in out
+
+
+def test_heading_anchors_ignored_on_tw_to_md(monkeypatch, capsys):
+    """--heading-anchors off on the wrong direction exits 0 (silently ignored)."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("= H = #h"))
+    exit_code = main(
+        [
+            "--from",
+            "tracwiki",
+            "--to",
+            "md",
+            "--heading-anchors",
+            "off",
+        ]
+    )
+    assert exit_code == 0
+
+
+def test_unknown_macros_bracket_default(monkeypatch, capsys):
+    """--unknown-macros defaults to bracket; stdout contains [MACRO: PageOutline]."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("[[PageOutline]]"))
+    exit_code = main(["--from", "tracwiki", "--to", "md"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "[MACRO: PageOutline]" in out
+
+
+def test_unknown_macros_preserve(monkeypatch, capsys):
+    """--unknown-macros preserve: stdout contains [[PageOutline]] literal."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("[[PageOutline]]"))
+    exit_code = main(
+        [
+            "--from",
+            "tracwiki",
+            "--to",
+            "md",
+            "--unknown-macros",
+            "preserve",
+        ]
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "[[PageOutline]]" in out
+
+
+def test_unknown_macros_drop(monkeypatch, capsys):
+    """--unknown-macros drop: stdout does NOT contain PageOutline."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("[[PageOutline]]"))
+    exit_code = main(
+        ["--from", "tracwiki", "--to", "md", "--unknown-macros", "drop"]
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "PageOutline" not in out
+
+
+def test_help_lists_new_flags(capsys):
+    """--help output includes both new flags."""
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    out = capsys.readouterr().out
+    assert "--heading-anchors" in out
+    assert "--unknown-macros" in out

@@ -87,6 +87,28 @@ def build_parser() -> argparse.ArgumentParser:
             " stdout or --output FILE."
         ),
     )
+    parser.add_argument(
+        "--heading-anchors",
+        dest="heading_anchors",
+        choices=("on", "off"),
+        default="on",
+        help=(
+            "Emit explicit #slug anchors on TracWiki headings"
+            " (md → tracwiki only). Default: on."
+        ),
+    )
+    parser.add_argument(
+        "--unknown-macros",
+        dest="unknown_macros",
+        choices=("bracket", "preserve", "drop"),
+        default="bracket",
+        help=(
+            "How to render unknown TracWiki macros"
+            " (tracwiki → md only). bracket = [MACRO: Name],"
+            " preserve = leave [[Name]] literal, drop = omit."
+            " Default: bracket."
+        ),
+    )
     return parser
 
 
@@ -94,11 +116,19 @@ def convert_text(
     text: str,
     source_format: str,
     target_format: str,
+    *,
+    heading_anchors: bool = True,
+    unknown_macros: str = "bracket",
 ) -> ConversionResult:
     """Convert text between Markdown and TracWiki.
 
     source_format: "md", "tracwiki", or "auto".
     target_format: "md" or "tracwiki".
+    heading_anchors: forwarded to convert_with_warnings() for md→tracwiki.
+        Ignored on the tracwiki→md direction.
+    unknown_macros: forwarded to tracwiki_to_markdown() for tracwiki→md.
+        Ignored on the md→tracwiki direction.
+
     Returns a ConversionResult (may be a pass-through with
     converted=False when source and target resolve to the same
     format).
@@ -121,8 +151,10 @@ def convert_text(
             warnings=[],
         )
     if source == "markdown" and target == "tracwiki":
-        return convert_with_warnings(text)
-    return tracwiki_to_markdown(text)
+        return convert_with_warnings(
+            text, heading_anchors=heading_anchors
+        )
+    return tracwiki_to_markdown(text, unknown_macros=unknown_macros)  # type: ignore[arg-type]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -135,6 +167,12 @@ def main(argv: list[str] | None = None) -> int:
     line each prefixed with ``warning: ``, and returns 0 on success
     (including pass-through).  Returns 1 on any I/O error with a
     ``trac-convert: <what>: <reason>`` message to stderr.
+
+    Note on direction-scoped flags: --heading-anchors only affects the
+    md→tracwiki direction and is silently ignored for tracwiki→md (and
+    vice-versa for --unknown-macros).  This is intentional — --from auto
+    may resolve either way at runtime, so mutual-exclusion checks are not
+    applied.
 
     Returns an integer exit code for ``sys.exit``.
     """
@@ -176,7 +214,15 @@ def main(argv: list[str] | None = None) -> int:
         text = sys.stdin.read()
 
     # --- convert ---
-    result = convert_text(text, args.source_format, args.target_format)
+    # Translate --heading-anchors on|off to bool before forwarding.
+    heading_anchors_bool = args.heading_anchors == "on"
+    result = convert_text(
+        text,
+        args.source_format,
+        args.target_format,
+        heading_anchors=heading_anchors_bool,
+        unknown_macros=args.unknown_macros,
+    )
 
     # --- write output ---
     if args.to_clipboard:
