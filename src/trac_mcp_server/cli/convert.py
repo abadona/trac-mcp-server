@@ -8,6 +8,7 @@ on top of this skeleton.
 
 import argparse
 import sys
+from pathlib import Path
 
 from .. import __version__
 from ..converters import (
@@ -48,6 +49,21 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("md", "tracwiki"),
         required=True,
         help="Target format. Required.",
+    )
+    parser.add_argument(
+        "input_file",
+        nargs="?",
+        default=None,
+        metavar="FILE",
+        help="Input file. Reads from stdin if omitted.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        dest="output_file",
+        default=None,
+        metavar="FILE",
+        help="Output file. Writes to stdout if omitted.",
     )
     return parser
 
@@ -90,19 +106,50 @@ def convert_text(
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run the CLI.
 
-    Reads all of stdin, dispatches via convert_text(), writes
-    result.text verbatim to stdout (no added newline), emits
-    result.warnings to stderr one line each prefixed with
-    ``warning: ``, and returns 0 on success (including pass-through).
+    Reads from positional FILE (or stdin when omitted), dispatches via
+    convert_text(), writes result.text verbatim to --output FILE (or
+    stdout when omitted), emits result.warnings to stderr one line each
+    prefixed with ``warning: ``, and returns 0 on success (including
+    pass-through).  Returns 1 on any file I/O OSError with a
+    ``trac-convert: <what>: <path>: <reason>`` message to stderr.
 
     Returns an integer exit code for ``sys.exit``.
     """
     args = build_parser().parse_args(argv)
-    text = sys.stdin.read()
+
+    # --- read input ---
+    if args.input_file is not None:
+        try:
+            text = Path(args.input_file).read_text(encoding="utf-8")
+        except OSError as e:
+            sys.stderr.write(
+                f"trac-convert: cannot read input file: {args.input_file}: {e.strerror or e}\n"
+            )
+            return 1
+    else:
+        text = sys.stdin.read()
+
+    # --- convert ---
     result = convert_text(text, args.source_format, args.target_format)
-    sys.stdout.write(result.text)
+
+    # --- write output ---
+    if args.output_file is not None:
+        try:
+            Path(args.output_file).write_text(
+                result.text, encoding="utf-8"
+            )
+        except OSError as e:
+            sys.stderr.write(
+                f"trac-convert: cannot write output file: {args.output_file}: {e.strerror or e}\n"
+            )
+            return 1
+    else:
+        sys.stdout.write(result.text)
+
+    # --- warnings (emitted after write, preserving Phase 13 ordering) ---
     for warning in result.warnings:
         sys.stderr.write(f"warning: {warning}\n")
+
     return 0
 
 
