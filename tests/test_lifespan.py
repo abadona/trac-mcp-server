@@ -21,11 +21,14 @@ from trac_mcp_server.mcp.lifespan import server_lifespan
 # -------------------------------------------------------------------------
 
 # Shorthand patches used across many tests
+# NOTE: After the bootstrap_config() extraction (Phase 20-01), load_dotenv,
+# discover_config_files, load_hierarchical_config, and load_config live in
+# trac_mcp_server.config_bootstrap (not lifespan). Patches target that module.
 _NO_CONFIG_FILES = patch(
-    "trac_mcp_server.mcp.lifespan.discover_config_files",
+    "trac_mcp_server.config_bootstrap.discover_config_files",
     return_value=[],
 )
-_MOCK_DOTENV = patch("trac_mcp_server.mcp.lifespan.load_dotenv")
+_MOCK_DOTENV = patch("trac_mcp_server.config_bootstrap.load_dotenv")
 
 
 def _make_config(**overrides):
@@ -58,7 +61,7 @@ class TestServerLifespanSuccess:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -89,7 +92,7 @@ class TestServerLifespanSuccess:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -122,7 +125,7 @@ class TestServerLifespanSuccess:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ) as mock_load,
             patch(
@@ -154,7 +157,7 @@ class TestServerLifespanSuccess:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ) as mock_load,
             patch(
@@ -207,11 +210,11 @@ class TestServerLifespanYamlConfig:
         with (
             _MOCK_DOTENV,
             patch(
-                "trac_mcp_server.mcp.lifespan.discover_config_files",
+                "trac_mcp_server.config_bootstrap.discover_config_files",
                 return_value=[config_file],
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_hierarchical_config",
+                "trac_mcp_server.config_bootstrap.load_hierarchical_config",
                 return_value={
                     "trac": {
                         "url": "https://yaml-trac.example.com",
@@ -221,7 +224,7 @@ class TestServerLifespanYamlConfig:
                 },
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ) as mock_load,
             patch(
@@ -275,11 +278,11 @@ class TestServerLifespanYamlConfig:
         with (
             _MOCK_DOTENV,
             patch(
-                "trac_mcp_server.mcp.lifespan.discover_config_files",
+                "trac_mcp_server.config_bootstrap.discover_config_files",
                 return_value=[config_file],
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_hierarchical_config",
+                "trac_mcp_server.config_bootstrap.load_hierarchical_config",
                 return_value={
                     "trac": {
                         "url": "https://yaml-trac.example.com",
@@ -290,7 +293,7 @@ class TestServerLifespanYamlConfig:
                 },
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -334,11 +337,11 @@ class TestServerLifespanYamlConfig:
         with (
             _MOCK_DOTENV,
             patch(
-                "trac_mcp_server.mcp.lifespan.discover_config_files",
+                "trac_mcp_server.config_bootstrap.discover_config_files",
                 return_value=[config_file],
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_hierarchical_config",
+                "trac_mcp_server.config_bootstrap.load_hierarchical_config",
                 return_value={
                     "trac": {
                         "url": "https://yaml-trac.example.com",
@@ -348,7 +351,7 @@ class TestServerLifespanYamlConfig:
                 },
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ) as mock_load,
             patch(
@@ -395,11 +398,11 @@ class TestServerLifespanYamlConfig:
         with (
             _MOCK_DOTENV,
             patch(
-                "trac_mcp_server.mcp.lifespan.discover_config_files",
+                "trac_mcp_server.config_bootstrap.discover_config_files",
                 return_value=[config_file],
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_hierarchical_config",
+                "trac_mcp_server.config_bootstrap.load_hierarchical_config",
                 return_value={
                     "trac": {
                         "url": "https://yaml-trac.example.com",
@@ -409,7 +412,7 @@ class TestServerLifespanYamlConfig:
                 },
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -443,7 +446,7 @@ class TestServerLifespanYamlConfig:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ) as mock_load,
             patch(
@@ -482,17 +485,17 @@ class TestServerLifespanYamlConfig:
         with (
             _MOCK_DOTENV,
             patch(
-                "trac_mcp_server.mcp.lifespan.discover_config_files",
+                "trac_mcp_server.config_bootstrap.discover_config_files",
                 return_value=[config_file],
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_hierarchical_config",
+                "trac_mcp_server.config_bootstrap.load_hierarchical_config",
                 return_value={
                     "trac": {"url": "https://yaml.example.com"}
                 },
             ),
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ) as mock_load,
             patch(
@@ -532,7 +535,7 @@ class TestServerLifespanConfigError:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 side_effect=ValueError("Trac URL not found"),
             ),
             patch("trac_mcp_server.mcp.lifespan._stderr_print"),
@@ -548,7 +551,7 @@ class TestServerLifespanConfigError:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 side_effect=ValueError("Trac URL not found"),
             ),
             patch("trac_mcp_server.mcp.lifespan._stderr_print"),
@@ -566,7 +569,7 @@ class TestServerLifespanConfigError:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 side_effect=ValueError("missing URL"),
             ),
             patch(
@@ -600,7 +603,7 @@ class TestServerLifespanConnectionError:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -625,7 +628,7 @@ class TestServerLifespanConnectionError:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -653,7 +656,7 @@ class TestServerLifespanConnectionError:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -688,7 +691,7 @@ class TestServerLifespanConnectionError:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -722,7 +725,7 @@ class TestServerLifespanShutdown:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -748,7 +751,7 @@ class TestServerLifespanShutdown:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
@@ -782,7 +785,7 @@ class TestServerLifespanShutdown:
             _MOCK_DOTENV,
             _NO_CONFIG_FILES,
             patch(
-                "trac_mcp_server.mcp.lifespan.load_config",
+                "trac_mcp_server.config_bootstrap.load_config",
                 return_value=config,
             ),
             patch(
