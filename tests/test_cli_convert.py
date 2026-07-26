@@ -1287,3 +1287,182 @@ def test_roundtrip_md_heading_anchor_survives_when_on(
     # Final md must contain the heading text without the anchor
     assert "# My Heading" in result
     assert "#my-heading" not in result
+
+
+# ---------------------------------------------------------------------------
+# Phase 18-02: Cross-mode I/O integration matrix
+# ---------------------------------------------------------------------------
+
+# Shared fixture: a short Markdown snippet unambiguously detected as markdown,
+# with content that produces tracwiki output, short enough for concise assertions.
+IO_MATRIX_INPUT = "# Title\n\nBody paragraph with **bold**.\n"
+
+# Leading token of the TracWiki output every combination must produce.
+# Confirmed by: convert_text(IO_MATRIX_INPUT, "md", "tracwiki").text[:16]
+IO_MATRIX_EXPECTED_TW_START = "= Title = #title"
+
+
+# ---------------------------------------------------------------------------
+# Task 1: 9-cell source × destination matrix (explicit named tests)
+# ---------------------------------------------------------------------------
+
+
+def test_io_matrix_stdin_to_stdout(monkeypatch, capsys):
+    """Matrix[stdin → stdout]: converted TracWiki written to stdout; stderr empty."""
+    monkeypatch.setattr("sys.stdin", io.StringIO(IO_MATRIX_INPUT))
+    exit_code = main(["--from", "md", "--to", "tracwiki"])
+    assert exit_code == EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out.startswith(IO_MATRIX_EXPECTED_TW_START)
+    assert captured.err == ""
+
+
+def test_io_matrix_stdin_to_file(monkeypatch, tmp_path, capsys):
+    """Matrix[stdin → file]: output written to file; stdout empty; stderr empty."""
+    out_file = tmp_path / "out.tw"
+    monkeypatch.setattr("sys.stdin", io.StringIO(IO_MATRIX_INPUT))
+    exit_code = main(
+        ["--from", "md", "--to", "tracwiki", "-o", str(out_file)]
+    )
+    assert exit_code == EXIT_OK
+    assert capsys.readouterr().out == ""
+    assert out_file.exists()
+    assert out_file.read_text(encoding="utf-8").startswith(
+        IO_MATRIX_EXPECTED_TW_START
+    )
+
+
+def test_io_matrix_stdin_to_clipboard(monkeypatch, capsys):
+    """Matrix[stdin → clipboard]: output sent to pyperclip.copy(); stdout empty; stderr empty."""
+    captured = {}
+
+    def fake_copy(text):
+        captured["text"] = text
+
+    monkeypatch.setattr(pyperclip, "copy", fake_copy)
+    monkeypatch.setattr("sys.stdin", io.StringIO(IO_MATRIX_INPUT))
+    exit_code = main(
+        ["--from", "md", "--to", "tracwiki", "--to-clipboard"]
+    )
+    assert exit_code == EXIT_OK
+    assert capsys.readouterr().out == ""
+    assert captured["text"].startswith(IO_MATRIX_EXPECTED_TW_START)
+
+
+def test_io_matrix_file_to_stdout(tmp_path, capsys):
+    """Matrix[file → stdout]: positional FILE read; converted TracWiki written to stdout."""
+    in_file = tmp_path / "in.md"
+    in_file.write_text(IO_MATRIX_INPUT, encoding="utf-8")
+    exit_code = main([str(in_file), "--from", "md", "--to", "tracwiki"])
+    assert exit_code == EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out.startswith(IO_MATRIX_EXPECTED_TW_START)
+    assert captured.err == ""
+
+
+def test_io_matrix_file_to_file(tmp_path, capsys):
+    """Matrix[file → file]: positional FILE → -o FILE; stdout empty; stderr empty."""
+    in_file = tmp_path / "in.md"
+    in_file.write_text(IO_MATRIX_INPUT, encoding="utf-8")
+    out_file = tmp_path / "out.tw"
+    exit_code = main(
+        [
+            str(in_file),
+            "--from",
+            "md",
+            "--to",
+            "tracwiki",
+            "-o",
+            str(out_file),
+        ]
+    )
+    assert exit_code == EXIT_OK
+    assert capsys.readouterr().out == ""
+    assert out_file.exists()
+    assert out_file.read_text(encoding="utf-8").startswith(
+        IO_MATRIX_EXPECTED_TW_START
+    )
+
+
+def test_io_matrix_file_to_clipboard(monkeypatch, tmp_path, capsys):
+    """Matrix[file → clipboard]: positional FILE → --to-clipboard; stdout empty; stderr empty."""
+    captured = {}
+
+    def fake_copy(text):
+        captured["text"] = text
+
+    monkeypatch.setattr(pyperclip, "copy", fake_copy)
+    in_file = tmp_path / "in.md"
+    in_file.write_text(IO_MATRIX_INPUT, encoding="utf-8")
+    exit_code = main(
+        [
+            str(in_file),
+            "--from",
+            "md",
+            "--to",
+            "tracwiki",
+            "--to-clipboard",
+        ]
+    )
+    assert exit_code == EXIT_OK
+    assert capsys.readouterr().out == ""
+    assert captured["text"].startswith(IO_MATRIX_EXPECTED_TW_START)
+
+
+def test_io_matrix_clipboard_to_stdout(monkeypatch, capsys):
+    """Matrix[clipboard → stdout]: --from-clipboard reads via pyperclip.paste(); stdout has output."""
+    monkeypatch.setattr(pyperclip, "paste", lambda: IO_MATRIX_INPUT)
+    exit_code = main(
+        ["--from-clipboard", "--from", "md", "--to", "tracwiki"]
+    )
+    assert exit_code == EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out.startswith(IO_MATRIX_EXPECTED_TW_START)
+    assert captured.err == ""
+
+
+def test_io_matrix_clipboard_to_file(monkeypatch, tmp_path, capsys):
+    """Matrix[clipboard → file]: --from-clipboard → -o FILE; stdout empty; stderr empty."""
+    monkeypatch.setattr(pyperclip, "paste", lambda: IO_MATRIX_INPUT)
+    out_file = tmp_path / "out.tw"
+    exit_code = main(
+        [
+            "--from-clipboard",
+            "--from",
+            "md",
+            "--to",
+            "tracwiki",
+            "-o",
+            str(out_file),
+        ]
+    )
+    assert exit_code == EXIT_OK
+    assert capsys.readouterr().out == ""
+    assert out_file.exists()
+    assert out_file.read_text(encoding="utf-8").startswith(
+        IO_MATRIX_EXPECTED_TW_START
+    )
+
+
+def test_io_matrix_clipboard_to_clipboard(monkeypatch, capsys):
+    """Matrix[clipboard → clipboard]: --from-clipboard → --to-clipboard; stdout empty; stderr empty."""
+    captured = {}
+
+    def fake_copy(text):
+        captured["text"] = text
+
+    monkeypatch.setattr(pyperclip, "paste", lambda: IO_MATRIX_INPUT)
+    monkeypatch.setattr(pyperclip, "copy", fake_copy)
+    exit_code = main(
+        [
+            "--from-clipboard",
+            "--from",
+            "md",
+            "--to",
+            "tracwiki",
+            "--to-clipboard",
+        ]
+    )
+    assert exit_code == EXIT_OK
+    assert capsys.readouterr().out == ""
+    assert captured["text"].startswith(IO_MATRIX_EXPECTED_TW_START)
