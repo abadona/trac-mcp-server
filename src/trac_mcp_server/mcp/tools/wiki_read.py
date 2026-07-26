@@ -17,11 +17,8 @@ import mcp.types as types
 from ...converters import tracwiki_to_markdown
 from ...core.async_utils import run_sync, run_sync_limited
 from ...core.client import TracClient
-from .errors import (
-    build_error_response,
-    format_timestamp,
-    translate_xmlrpc_error,
-)
+from .errors import build_error_response, format_timestamp
+from .registry import ToolSpec
 
 # Tool definitions for list_tools()
 WIKI_READ_TOOLS = [
@@ -106,6 +103,25 @@ WIKI_READ_TOOLS = [
             "required": [],
         },
     ),
+    types.Tool(
+        name="wiki_get_history",
+        description="Get wiki page revision history newest-first. Returns list of revisions with version, author, lastModified, and comment (commit message). Useful for detecting prior edits or scanning attribution markers in change comments.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "page_name": {
+                    "type": "string",
+                    "description": "Wiki page name to retrieve history for (required)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum revisions to return, newest first. Omit for all revisions.",
+                    "minimum": 1,
+                },
+            },
+            "required": ["page_name"],
+        },
+    ),
 ]
 
 
@@ -144,56 +160,6 @@ def decode_cursor(cursor: str) -> tuple[int, int]:
         return cursor_data["offset"], cursor_data["total"]
     except (KeyError, json.JSONDecodeError, ValueError) as e:
         raise ValueError(f"Invalid cursor: {e}") from e
-
-
-async def handle_wiki_read_tool(
-    name: str,
-    arguments: dict | None,
-    client: TracClient,
-) -> types.CallToolResult:
-    """Handle read-only wiki tool execution.
-
-    Args:
-        name: Tool name (wiki_get, wiki_search, wiki_recent_changes)
-        arguments: Tool arguments (dict or None)
-        client: Pre-configured TracClient instance
-
-    Returns:
-        CallToolResult with both text content and structured JSON
-
-    Raises:
-        ValueError: If tool name is unknown
-    """
-    # Ensure arguments is a dict
-    args = arguments or {}
-
-    try:
-        match name:
-            case "wiki_get":
-                return await _handle_get(client, args)
-            case "wiki_search":
-                return await _handle_search(client, args)
-            case "wiki_recent_changes":
-                return await _handle_recent_changes(client, args)
-            case _:
-                raise ValueError(f"Unknown wiki read tool: {name}")
-
-    except xmlrpc.client.Fault as e:
-        return translate_xmlrpc_error(
-            e, "wiki", args.get("page_name")
-        )
-    except ValueError as e:
-        return build_error_response(
-            "validation_error",
-            str(e),
-            "Check parameter values and retry.",
-        )
-    except Exception as e:
-        return build_error_response(
-            "server_error",
-            str(e),
-            "Contact Trac administrator or retry later.",
-        )
 
 
 async def _handle_get(
@@ -429,17 +395,17 @@ async def _handle_recent_changes(
         page_version = change.get("version", 1)
 
         # Format timestamp
-        if isinstance(last_modified, xmlrpc.client.DateTime):
-            # Convert DateTime to formatted string
-            dt = datetime.fromtimestamp(
-                time.mktime(last_modified.timetuple())
-            )
-            modified_str = dt.strftime("%Y-%m-%d %H:%M")
-        elif isinstance(last_modified, (int, float)):
-            dt = datetime.fromtimestamp(last_modified)
-            modified_str = dt.strftime("%Y-%m-%d %H:%M")
-        else:
-            modified_str = str(last_modified)
+        match last_modified:
+            case xmlrpc.client.DateTime() as dt_val:
+                dt = datetime.fromtimestamp(
+                    time.mktime(dt_val.timetuple())
+                )
+                modified_str = dt.strftime("%Y-%m-%d %H:%M")
+            case int() | float() as ts:
+                dt = datetime.fromtimestamp(ts)
+                modified_str = dt.strftime("%Y-%m-%d %H:%M")
+            case _:
+                modified_str = str(last_modified)
 
         response_lines.append(
             f"- {page_name} (modified: {modified_str} by {author})"
@@ -474,3 +440,115 @@ async def _handle_recent_changes(
     )
 
 
+async def _handle_get_history(
+    client: TracClient, args: dict
+) -> types.CallToolResult:
+    """Handle wiki_get_history.
+
+    Walks the page's version history newest-first, fetching per-version
+    metadata via ``client.get_wiki_page_info(page_name, version)``. The
+    ``comment`` field (Trac XmlRpcPlugin post trac-hacks #1864) is
+    preserved for attribution-marker scanning by auto-pm's edit workflow.
+    """
+    page_name = args.get("page_name")
+    if not page_name:
+        return build_error_response(
+            "validation_error",
+            "page_name is required",
+            "Provide page_name parameter.",
+        )
+
+    limit = args.get("limit")
+
+    # Fetch current version to determine the walk range
+    try:
+        current_info = await run_sync_limited(
+            client.get_wiki_page_info, page_name
+        )
+    except xmlrpc.client.Fault as err:
+        from .errors import translate_xmlrpc_error
+
+        return translate_xmlrpc_error(err, "wiki", page_name)
+
+    current_version = current_info.get("version", 1)
+    if not isinstance(current_version, int) or current_version < 1:
+        current_version = 1
+
+    # Range newest-first: current, current-1, ..., 1
+    versions = list(range(current_version, 0, -1))
+    if limit is not None and limit > 0:
+        versions = versions[:limit]
+
+    revisions: list[dict] = []
+    for v in versions:
+        try:
+            info = await run_sync_limited(
+                client.get_wiki_page_info, page_name, v
+            )
+        except xmlrpc.client.Fault:
+            # Skip revisions we can't fetch (permissions, gaps) but
+            # keep going — partial history is better than none.
+            continue
+
+        revisions.append(
+            {
+                "version": v,
+                "author": info.get("author", "unknown"),
+                "lastModified": format_timestamp(
+                    info.get("lastModified", "")
+                ),
+                "comment": info.get("comment", "") or "",
+            }
+        )
+
+    # Format human-readable text output
+    if revisions:
+        response_lines = [f"# {page_name} history", ""]
+        for rev in revisions:
+            comment_str = rev["comment"] or "(no comment)"
+            response_lines.append(
+                f"- v{rev['version']} by {rev['author']} at {rev['lastModified']}: {comment_str}"
+            )
+    else:
+        response_lines = [
+            f"# {page_name} history",
+            "",
+            "(no revisions found)",
+        ]
+
+    return types.CallToolResult(
+        content=[
+            types.TextContent(
+                type="text", text="\n".join(response_lines)
+            )
+        ],
+        structuredContent={
+            "page_name": page_name,
+            "revisions": revisions,
+        },
+    )
+
+
+# ToolSpec list for registry-based dispatch
+WIKI_READ_SPECS: list[ToolSpec] = [
+    ToolSpec(
+        tool=WIKI_READ_TOOLS[0],
+        permissions=frozenset({"WIKI_VIEW"}),
+        handler=_handle_get,
+    ),
+    ToolSpec(
+        tool=WIKI_READ_TOOLS[1],
+        permissions=frozenset({"WIKI_VIEW"}),
+        handler=_handle_search,
+    ),
+    ToolSpec(
+        tool=WIKI_READ_TOOLS[2],
+        permissions=frozenset({"WIKI_VIEW"}),
+        handler=_handle_recent_changes,
+    ),
+    ToolSpec(
+        tool=WIKI_READ_TOOLS[3],
+        permissions=frozenset({"WIKI_VIEW"}),
+        handler=_handle_get_history,
+    ),
+]

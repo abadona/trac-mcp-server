@@ -17,22 +17,20 @@ from trac_mcp_server.config import Config
 from trac_mcp_server.converters import ConversionResult
 from trac_mcp_server.mcp.tools import WIKI_TOOLS
 from trac_mcp_server.mcp.tools.errors import format_timestamp
+from trac_mcp_server.mcp.tools.registry import ToolRegistry
 from trac_mcp_server.mcp.tools.wiki_read import (
     _handle_get,
+    _handle_get_history,
     _handle_recent_changes,
     _handle_search,
     decode_cursor,
     encode_cursor,
 )
 from trac_mcp_server.mcp.tools.wiki_write import (
+    WIKI_WRITE_SPECS,
     _handle_create,
     _handle_delete,
     _handle_update,
-)
-
-# For backward compatibility with test that uses handle_wiki_tool
-from trac_mcp_server.mcp.tools.wiki_write import (
-    handle_wiki_write_tool as handle_wiki_tool,
 )
 
 
@@ -83,9 +81,14 @@ class TestCursorEncoding(unittest.TestCase):
 class TestWikiTools(unittest.TestCase):
     """Test WIKI_TOOLS definitions."""
 
-    def test_five_tools_defined(self):
-        """Test WIKI_TOOLS contains exactly 6 tools."""
-        self.assertEqual(len(WIKI_TOOLS), 6)
+    def test_eleven_tools_defined(self):
+        """Test WIKI_TOOLS contains exactly 11 tools.
+
+        4 read (wiki_get, wiki_search, wiki_recent_changes,
+        wiki_get_history) + 3 write (create, update, delete) +
+        4 attachment (put, get, list, delete).
+        """
+        self.assertEqual(len(WIKI_TOOLS), 11)
 
     def test_tool_names(self):
         """Test tool names are correct."""
@@ -97,6 +100,21 @@ class TestWikiTools(unittest.TestCase):
         self.assertIn("wiki_update", tool_names)
         self.assertIn("wiki_delete", tool_names)
         self.assertIn("wiki_recent_changes", tool_names)
+        self.assertIn("wiki_get_history", tool_names)
+
+    def test_wiki_get_history_schema(self):
+        """Test wiki_get_history has correct required fields."""
+        history_tool = next(
+            t for t in WIKI_TOOLS if t.name == "wiki_get_history"
+        )
+
+        self.assertIn(
+            "page_name", history_tool.inputSchema["properties"]
+        )
+        self.assertIn("limit", history_tool.inputSchema["properties"])
+        self.assertEqual(
+            history_tool.inputSchema["required"], ["page_name"]
+        )
 
     def test_wiki_get_schema(self):
         """Test wiki_get has correct required fields."""
@@ -519,6 +537,188 @@ class TestHandleRecentChanges(unittest.TestCase):
             self.assertIn("2026-02-01", text)
 
 
+class TestHandleGetHistory(unittest.TestCase):
+    """Test _handle_get_history handler."""
+
+    def setUp(self):
+        """Set up mock client."""
+        self.mock_client = MagicMock()
+
+    def _build_info_responses(self, current_version: int) -> list:
+        """Build fake get_wiki_page_info responses.
+
+        Returns (current_info, v5_info, v4_info, v3_info, v2_info, v1_info).
+        The first call is the unversioned lookup, then each per-version call.
+        """
+        current = {
+            "name": "WikiStart",
+            "version": current_version,
+            "author": f"alice{current_version}",
+            "lastModified": datetime(2026, 3, 1, 14, 0, 0),
+            "comment": f"revision {current_version} comment",
+        }
+        versioned = [
+            {
+                "name": "WikiStart",
+                "version": v,
+                "author": f"alice{v}",
+                "lastModified": datetime(2026, 3, 1, 14, 0, 0),
+                "comment": f"revision {v} comment",
+            }
+            for v in range(current_version, 0, -1)
+        ]
+        return [current] + versioned
+
+    def test_handle_get_history_success(self):
+        """_handle_get_history returns revisions newest-first."""
+        with patch(
+            "trac_mcp_server.mcp.tools.wiki_read.run_sync_limited"
+        ) as mock_run_sync_limited:
+            mock_run_sync_limited.side_effect = (
+                self._build_info_responses(5)
+            )
+
+            result = asyncio.run(
+                _handle_get_history(
+                    self.mock_client, {"page_name": "WikiStart"}
+                )
+            )
+
+            from mcp.types import CallToolResult
+
+            self.assertIsInstance(result, CallToolResult)
+            self.assertFalse(getattr(result, "isError", False))
+
+            structured = result.structuredContent
+            self.assertIsNotNone(structured)
+            self.assertEqual(structured["page_name"], "WikiStart")
+
+            revisions = structured["revisions"]
+            self.assertEqual(len(revisions), 5)
+            # Newest first
+            self.assertEqual(revisions[0]["version"], 5)
+            self.assertEqual(revisions[-1]["version"], 1)
+            # Comment preserved
+            self.assertEqual(
+                revisions[0]["comment"], "revision 5 comment"
+            )
+            self.assertEqual(
+                revisions[-1]["comment"], "revision 1 comment"
+            )
+            # Text content has header
+            text = result.content[0].text
+            self.assertIn("# WikiStart history", text)
+            self.assertIn("v5 by alice5", text)
+            self.assertIn("revision 5 comment", text)
+
+    def test_handle_get_history_with_limit(self):
+        """_handle_get_history respects limit parameter."""
+        with patch(
+            "trac_mcp_server.mcp.tools.wiki_read.run_sync_limited"
+        ) as mock_run_sync_limited:
+            # Current version lookup + 3 versioned calls (limit=3)
+            responses = self._build_info_responses(5)
+            # Trim to current + first 3 versions only
+            mock_run_sync_limited.side_effect = responses[:4]
+
+            result = asyncio.run(
+                _handle_get_history(
+                    self.mock_client,
+                    {"page_name": "WikiStart", "limit": 3},
+                )
+            )
+
+            revisions = result.structuredContent["revisions"]
+            self.assertEqual(len(revisions), 3)
+            self.assertEqual(
+                [r["version"] for r in revisions], [5, 4, 3]
+            )
+
+    def test_handle_get_history_preserves_comment_field(self):
+        """_handle_get_history preserves comment field in structuredContent."""
+        with patch(
+            "trac_mcp_server.mcp.tools.wiki_read.run_sync_limited"
+        ) as mock_run_sync_limited:
+            mock_run_sync_limited.side_effect = [
+                {
+                    "name": "WikiStart",
+                    "version": 2,
+                    "author": "alice",
+                    "lastModified": datetime(2026, 3, 1, 14, 0, 0),
+                    "comment": "initial",
+                },
+                {
+                    "name": "WikiStart",
+                    "version": 2,
+                    "author": "bob",
+                    "lastModified": datetime(2026, 3, 1, 15, 0, 0),
+                    "comment": "auto-pm: ticket #42",
+                },
+                {
+                    "name": "WikiStart",
+                    "version": 1,
+                    "author": "alice",
+                    "lastModified": datetime(2026, 3, 1, 14, 0, 0),
+                    "comment": "first edit",
+                },
+            ]
+
+            result = asyncio.run(
+                _handle_get_history(
+                    self.mock_client, {"page_name": "WikiStart"}
+                )
+            )
+
+            revisions = result.structuredContent["revisions"]
+            self.assertEqual(len(revisions), 2)
+            # Attribution marker preserved exactly
+            self.assertEqual(
+                revisions[0]["comment"], "auto-pm: ticket #42"
+            )
+            self.assertEqual(revisions[1]["comment"], "first edit")
+
+    def test_handle_get_history_missing_page_name(self):
+        """_handle_get_history returns validation error when page_name missing."""
+        result = asyncio.run(_handle_get_history(self.mock_client, {}))
+
+        self.assertTrue(result.isError)
+        text = result.content[0].text
+        self.assertIn("validation_error", text)
+        self.assertIn("page_name is required", text)
+
+    def test_handle_get_history_empty_comment_coerced_to_string(self):
+        """_handle_get_history returns empty string for missing/None comment."""
+        with patch(
+            "trac_mcp_server.mcp.tools.wiki_read.run_sync_limited"
+        ) as mock_run_sync_limited:
+            mock_run_sync_limited.side_effect = [
+                {
+                    "name": "WikiStart",
+                    "version": 1,
+                    "author": "alice",
+                    "lastModified": datetime(2026, 3, 1, 14, 0, 0),
+                    # No comment field at all (old Trac XmlRpcPlugin)
+                },
+                {
+                    "name": "WikiStart",
+                    "version": 1,
+                    "author": "alice",
+                    "lastModified": datetime(2026, 3, 1, 14, 0, 0),
+                    "comment": None,
+                },
+            ]
+
+            result = asyncio.run(
+                _handle_get_history(
+                    self.mock_client, {"page_name": "WikiStart"}
+                )
+            )
+
+            revisions = result.structuredContent["revisions"]
+            self.assertEqual(len(revisions), 1)
+            self.assertEqual(revisions[0]["comment"], "")
+
+
 class TestHandleCreate(unittest.TestCase):
     """Test _handle_create handler."""
 
@@ -827,9 +1027,10 @@ class TestHandleDelete(unittest.TestCase):
                 404, "Page not found"
             )
 
-            # Call through handle_wiki_tool to test error translation
+            # Call through ToolRegistry to test error translation
+            registry = ToolRegistry(WIKI_WRITE_SPECS)
             result = asyncio.run(
-                handle_wiki_tool(
+                registry.call_tool(
                     "wiki_delete",
                     {"page_name": "NonExistentPage"},
                     mock_client,
@@ -864,9 +1065,10 @@ class TestHandleDelete(unittest.TestCase):
                 403, "Permission denied"
             )
 
-            # Call through handle_wiki_tool to test error translation
+            # Call through ToolRegistry to test error translation
+            registry = ToolRegistry(WIKI_WRITE_SPECS)
             result = asyncio.run(
-                handle_wiki_tool(
+                registry.call_tool(
                     "wiki_delete",
                     {"page_name": "ProtectedPage"},
                     mock_client,
@@ -883,27 +1085,19 @@ class TestHandleDelete(unittest.TestCase):
 
 
 class TestHandleWikiTool(unittest.TestCase):
-    """Test handle_wiki_tool dispatcher."""
+    """Test wiki tool dispatch via ToolRegistry."""
 
     def test_unknown_tool(self):
-        """Test handle_wiki_tool returns error for unknown tool."""
-        config = Config(
-            trac_url="http://test", username="test", password="test"
-        )
+        """Test ToolRegistry raises ValueError for unknown tool."""
         mock_client = MagicMock()
-        mock_client.config = config
 
-        result = asyncio.run(
-            handle_wiki_tool("wiki_unknown", {}, mock_client)
-        )
+        registry = ToolRegistry(WIKI_WRITE_SPECS)
 
-        # Should return error response
-        self.assertTrue(result.isError)
-        self.assertEqual(len(result.content), 1)
-        text = result.content[0].text
-
-        self.assertIn("Error (validation_error)", text)
-        self.assertIn("Unknown wiki", text)
+        # ToolRegistry raises ValueError for unregistered tool names
+        with self.assertRaises(ValueError):
+            asyncio.run(
+                registry.call_tool("wiki_unknown", {}, mock_client)
+            )
 
 
 if __name__ == "__main__":

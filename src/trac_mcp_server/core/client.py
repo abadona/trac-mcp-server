@@ -1,3 +1,4 @@
+import base64
 import threading
 import xmlrpc.client
 from typing import Any
@@ -115,6 +116,12 @@ class TracClient:
                 return data_value
             case "double":
                 return float(data_value)
+            case "base64":
+                # XML-RPC <base64> wraps binary attachment payloads.
+                # data_value is the base64-encoded string from ElementTree;
+                # b64decode accepts str directly and returns raw bytes.
+                # Empty Binary (<base64/>) -> "" -> b"" (graceful zero-length).
+                return base64.b64decode(data_value or "")
             case _:
                 return data_value
 
@@ -585,6 +592,113 @@ class TracClient:
         result = self._rpc_request("wiki", "deletePage", page_name)
         return result
 
+    # Wiki attachment operations
+
+    def put_wiki_attachment(
+        self,
+        page_name: str,
+        filename: str,
+        description: str,
+        data: xmlrpc.client.Binary,
+        replace: bool = False,
+    ) -> str:
+        """
+        Upload a file as an attachment to a wiki page.
+
+        Wraps ``wiki.putAttachmentEx``, NOT the bare ``wiki.putAttachment``:
+        the ``Ex`` variant accepts both a description and a replace flag,
+        while the bare form drops the description and forces replace=True.
+
+        The XML-RPC signature is
+        ``putAttachmentEx(pagename, filename, description, data, replace)``
+        (note: data BEFORE replace, separate pagename + filename — NOT a
+        single ``"page/file"`` path like the bare ``putAttachment``).
+
+        Args:
+            page_name: Wiki page name. The target wiki page must already
+                exist or Trac will raise ``ResourceNotFound``.
+            filename: Attachment filename (basename only).
+            description: Attachment description.
+            data: Attachment payload wrapped in ``xmlrpc.client.Binary``.
+            replace: If True, overwrite an existing attachment with the
+                same name; if False and a collision occurs, Trac will
+                rename the new attachment and return the new filename.
+
+        Returns:
+            Server-returned filename of the stored attachment (typically
+            ``filename``; may differ on collision when replace=False).
+
+        Raises:
+            xmlrpc.client.Fault: If wiki page does not exist
+                (ResourceNotFound), or permissions denied
+                (requires WIKI_MODIFY).
+        """
+        return self._rpc_request(
+            "wiki",
+            "putAttachmentEx",
+            page_name,
+            filename,
+            description,
+            data,
+            replace,
+        )
+
+    def get_wiki_attachment(self, page_path: str) -> bytes:
+        """
+        Download a wiki attachment as raw bytes.
+
+        Relies on ``_parse_xmlrpc_value`` decoding the XML-RPC ``<base64>``
+        payload into ``bytes``.
+
+        Args:
+            page_path: Attachment path of the form ``"PageName/filename"``.
+
+        Returns:
+            Raw attachment bytes.
+
+        Raises:
+            xmlrpc.client.Fault: If wiki page or attachment not found,
+                or permissions denied (requires WIKI_VIEW).
+        """
+        return self._rpc_request("wiki", "getAttachment", page_path)
+
+    def list_wiki_attachments(self, page_name: str) -> list[str]:
+        """
+        List attachments on a wiki page.
+
+        Note: ``wiki.listAttachments`` returns a flat ``list[str]`` of
+        ``"PageName/filename"`` paths — NOT a list of ``(filename,
+        description, size, time, author)`` tuples like the ticket
+        equivalent. This asymmetry is preserved here intentionally.
+
+        Args:
+            page_name: Wiki page name to list attachments for.
+
+        Returns:
+            List of ``"PageName/filename"`` path strings.
+
+        Raises:
+            xmlrpc.client.Fault: If wiki page not found or permissions
+                denied (requires WIKI_VIEW).
+        """
+        return self._rpc_request("wiki", "listAttachments", page_name)
+
+    def delete_wiki_attachment(self, page_path: str) -> bool:
+        """
+        Delete a wiki attachment.
+
+        Args:
+            page_path: Attachment path of the form ``"PageName/filename"``.
+
+        Returns:
+            True on success.
+
+        Raises:
+            xmlrpc.client.Fault: If page or attachment not found, or
+                permissions denied (requires WIKI_DELETE).
+        """
+        return self._rpc_request("wiki", "deleteAttachment", page_path)
+
     def get_recent_wiki_changes(
         self, since_timestamp: int = 0
     ) -> list[dict[str, Any]]:
@@ -720,6 +834,165 @@ class TracClient:
         """
         self._rpc_request("ticket.milestone", "delete", name)
 
+    # Ticket admin (components and enums)
+
+    def list_components(self) -> list[dict[str, Any]]:
+        """
+        Get all ticket components with their attributes.
+
+        Returns:
+            List of dicts with keys: name, owner, description.
+
+        Raises:
+            xmlrpc.client.Fault: If permissions denied (requires TICKET_VIEW).
+        """
+        names = self._rpc_request("ticket.component", "getAll")
+        result: list[dict[str, Any]] = []
+        for name in names:
+            attrs = self._rpc_request("ticket.component", "get", name)
+            # attrs is typically a dict; normalize to ensure name is present.
+            entry: dict[str, Any] = {
+                "name": name,
+                "owner": "",
+                "description": "",
+            }
+            if isinstance(attrs, dict):
+                entry.update(
+                    {
+                        k: v
+                        for k, v in attrs.items()
+                        if k in ("owner", "description")
+                    }
+                )
+            result.append(entry)
+        return result
+
+    def create_component(
+        self,
+        name: str,
+        description: str = "",
+        owner: str = "",
+    ) -> None:
+        """
+        Create a new ticket component.
+
+        Args:
+            name: Component name (required, must be unique).
+            description: Optional description (default: empty string).
+            owner: Optional default owner username (default: empty string).
+
+        Raises:
+            xmlrpc.client.Fault: If component exists, validation fails,
+                or permissions denied (requires TICKET_ADMIN).
+        """
+        attributes: dict[str, Any] = {
+            "description": description,
+            "owner": owner,
+        }
+        self._rpc_request(
+            "ticket.component", "create", name, attributes
+        )
+
+    def delete_component(self, name: str) -> None:
+        """
+        Delete a ticket component.
+
+        Args:
+            name: Component name to delete.
+
+        Raises:
+            xmlrpc.client.Fault: If component doesn't exist, or
+                permissions denied (requires TICKET_ADMIN).
+        """
+        self._rpc_request("ticket.component", "delete", name)
+
+    def list_enum(self, enum_type: str) -> list[str]:
+        """
+        Get all values for a Trac enum field.
+
+        Args:
+            enum_type: One of "priority", "resolution", "severity", "type",
+                "version". Must be a valid Trac enum service name.
+
+        Returns:
+            List of enum value names, in Trac's configured order.
+
+        Raises:
+            ValueError: If enum_type is not in the supported whitelist.
+            xmlrpc.client.Fault: If permissions denied (requires TICKET_VIEW).
+        """
+        if enum_type not in {
+            "priority",
+            "resolution",
+            "severity",
+            "type",
+            "version",
+        }:
+            raise ValueError(
+                f"Unsupported enum_type '{enum_type}'. "
+                "Expected one of: priority, resolution, severity, type, version."
+            )
+        return self._rpc_request(f"ticket.{enum_type}", "getAll")
+
+    def create_enum(
+        self, enum_type: str, name: str, value: int = 0
+    ) -> None:
+        """
+        Create a new value for a Trac enum field.
+
+        Args:
+            enum_type: One of "priority", "resolution", "severity", "type",
+                "version". Must be a valid Trac enum service name.
+            name: New enum value name.
+            value: Sort-order integer (default: 0). Trac requires this
+                positional argument; passing 0 appends to the end.
+
+        Raises:
+            ValueError: If enum_type is not in the supported whitelist.
+            xmlrpc.client.Fault: If value exists, validation fails, or
+                permissions denied (requires TICKET_ADMIN).
+        """
+        if enum_type not in {
+            "priority",
+            "resolution",
+            "severity",
+            "type",
+            "version",
+        }:
+            raise ValueError(
+                f"Unsupported enum_type '{enum_type}'. "
+                "Expected one of: priority, resolution, severity, type, version."
+            )
+        # Trac's enum.create requires both name and value (sort order).
+        self._rpc_request(f"ticket.{enum_type}", "create", name, value)
+
+    def delete_enum(self, enum_type: str, name: str) -> None:
+        """
+        Delete a value from a Trac enum field.
+
+        Args:
+            enum_type: One of "priority", "resolution", "severity", "type",
+                "version". Must be a valid Trac enum service name.
+            name: Enum value name to delete.
+
+        Raises:
+            ValueError: If enum_type is not in the supported whitelist.
+            xmlrpc.client.Fault: If value doesn't exist, or permissions
+                denied (requires TICKET_ADMIN).
+        """
+        if enum_type not in {
+            "priority",
+            "resolution",
+            "severity",
+            "type",
+            "version",
+        }:
+            raise ValueError(
+                f"Unsupported enum_type '{enum_type}'. "
+                "Expected one of: priority, resolution, severity, type, version."
+            )
+        self._rpc_request(f"ticket.{enum_type}", "delete", name)
+
     # Ticket field metadata
 
     def delete_ticket(self, ticket_id: int) -> bool:
@@ -752,3 +1025,102 @@ class TracClient:
         """
         result = self._rpc_request("ticket", "getTicketFields")
         return result
+
+    # Ticket attachment operations
+
+    def put_ticket_attachment(
+        self,
+        ticket_id: int,
+        filename: str,
+        description: str,
+        data: xmlrpc.client.Binary,
+        replace: bool = False,
+    ) -> Any:
+        """
+        Upload a file as an attachment to a ticket.
+
+        Args:
+            ticket_id: Ticket number to attach to
+            filename: Attachment filename (basename only)
+            description: Attachment description
+            data: Attachment payload wrapped in ``xmlrpc.client.Binary``
+            replace: If True, overwrite an existing attachment of the same name
+
+        Returns:
+            Server-returned identifier for the stored attachment (typically the
+            stored filename string).
+
+        Raises:
+            xmlrpc.client.Fault: If ticket not found, permissions denied
+                (requires TICKET_APPEND), or attachment exists and replace=False
+        """
+        return self._rpc_request(
+            "ticket",
+            "putAttachment",
+            ticket_id,
+            filename,
+            description,
+            data,
+            replace,
+        )
+
+    def get_ticket_attachment(
+        self, ticket_id: int, filename: str
+    ) -> bytes:
+        """
+        Download a ticket attachment as raw bytes.
+
+        Relies on ``_parse_xmlrpc_value`` decoding the XML-RPC ``<base64>``
+        payload into ``bytes``.
+
+        Args:
+            ticket_id: Ticket number the attachment belongs to
+            filename: Attachment filename
+
+        Returns:
+            Raw attachment bytes.
+
+        Raises:
+            xmlrpc.client.Fault: If ticket or attachment not found, or
+                permissions denied (requires TICKET_VIEW)
+        """
+        return self._rpc_request(
+            "ticket", "getAttachment", ticket_id, filename
+        )
+
+    def list_ticket_attachments(self, ticket_id: int) -> list[Any]:
+        """
+        List attachments on a ticket.
+
+        Args:
+            ticket_id: Ticket number to list attachments for
+
+        Returns:
+            List of attachment tuples [filename, description, size, time, author]
+
+        Raises:
+            xmlrpc.client.Fault: If ticket not found or permissions denied
+                (requires TICKET_VIEW)
+        """
+        return self._rpc_request("ticket", "listAttachments", ticket_id)
+
+    def delete_ticket_attachment(
+        self, ticket_id: int, filename: str
+    ) -> bool:
+        """
+        Delete a ticket attachment.
+
+        Args:
+            ticket_id: Ticket number the attachment belongs to
+            filename: Attachment filename to delete
+
+        Returns:
+            True on success.
+
+        Raises:
+            xmlrpc.client.Fault: If ticket or attachment not found, or
+                permissions denied (requires TICKET_ADMIN)
+        """
+        return self._rpc_request(
+            "ticket", "deleteAttachment", ticket_id, filename
+        )

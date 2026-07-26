@@ -45,12 +45,16 @@ htmlcov/
 .coverage
 coverage.xml
 .ruff_cache/
+scripts/*md
+scripts/*log
 
 # Logs
 *.log
 
-# Test reports
-scripts/comprehensive-mcp-tool-test-*.md
-
 # PyInstaller
 *.spec
+
+# auto-pm runtime artifacts (created when auto-pm CLI runs against this repo)
+.auto-pm/snapshots.db
+.auto-pm/snapshots.db-wal
+.auto-pm/snapshots.db-shm

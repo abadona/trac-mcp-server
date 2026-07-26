@@ -14,7 +14,8 @@ from ...converters import markdown_to_tracwiki
 from ...core.async_utils import run_sync
 from ...core.client import TracClient
 from .constants import DEFAULT_TICKET_TYPE, TICKET_TYPE_LIST
-from .errors import build_error_response, translate_xmlrpc_error
+from .errors import build_error_response
+from .registry import ToolSpec
 
 
 def _build_ticket_create_tool() -> types.Tool:
@@ -43,6 +44,10 @@ def _build_ticket_create_tool() -> types.Tool:
                 "priority": {
                     "type": "string",
                     "description": "Priority level",
+                },
+                "severity": {
+                    "type": "string",
+                    "description": "Severity level",
                 },
                 "component": {
                     "type": "string",
@@ -88,13 +93,33 @@ TICKET_WRITE_TOOLS = [
                     "type": "string",
                     "description": "Comment in Markdown (optional, max 10000 chars)",
                 },
+                "summary": {
+                    "type": "string",
+                    "description": "New summary (ticket title)",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "New description in Markdown (replaces ticket body)",
+                },
+                "type": {
+                    "type": "string",
+                    "description": "New ticket type (e.g. defect, enhancement, task)",
+                },
                 "status": {
                     "type": "string",
-                    "description": "New status",
+                    "description": "New status. Note: Trac workflow gates direct status writes; prefer 'action' for transitions (e.g. action='accept' to move new->accepted).",
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Trac workflow action to perform (e.g. 'accept', 'resolve', 'reopen', 'reassign'). The canonical way to transition a ticket through its workflow. Action-specific input fields are passed via 'action_<action>_<action>_<field>' keys (e.g. action_resolve_resolve_resolution='fixed').",
                 },
                 "priority": {
                     "type": "string",
                     "description": "New priority",
+                },
+                "severity": {
+                    "type": "string",
+                    "description": "New severity",
                 },
                 "component": {
                     "type": "string",
@@ -139,54 +164,6 @@ TICKET_WRITE_TOOLS = [
 ]
 
 
-async def handle_ticket_write_tool(
-    name: str,
-    arguments: dict | None,
-    client: TracClient,
-) -> types.CallToolResult:
-    """Handle write ticket tool execution.
-
-    Args:
-        name: Tool name (ticket_create, ticket_update, ticket_delete)
-        arguments: Tool arguments (dict or None)
-        client: Pre-configured TracClient instance
-
-    Returns:
-        CallToolResult for success messages, or CallToolResult with isError=True for errors
-
-    Raises:
-        ValueError: If tool name is unknown
-    """
-    # Ensure arguments is a dict
-    args = arguments or {}
-
-    try:
-        match name:
-            case "ticket_create":
-                return await _handle_create(client, args)
-            case "ticket_update":
-                return await _handle_update(client, args)
-            case "ticket_delete":
-                return await _handle_delete(client, args)
-            case _:
-                raise ValueError(f"Unknown ticket write tool: {name}")
-
-    except xmlrpc.client.Fault as e:
-        return translate_xmlrpc_error(e, "ticket")
-    except ValueError as e:
-        return build_error_response(
-            "validation_error",
-            str(e),
-            "Check parameter values and retry.",
-        )
-    except Exception as e:
-        return build_error_response(
-            "server_error",
-            str(e),
-            "Contact Trac administrator or retry later.",
-        )
-
-
 async def _handle_create(
     client: TracClient, args: dict
 ) -> types.CallToolResult:
@@ -217,6 +194,8 @@ async def _handle_create(
     # Add optional fields if provided
     if "priority" in args:
         attributes["priority"] = args["priority"]
+    if "severity" in args:
+        attributes["severity"] = args["severity"]
     if "component" in args:
         attributes["component"] = args["component"]
     if "milestone" in args:
@@ -271,6 +250,8 @@ async def _handle_update(
         attributes["status"] = args["status"]
     if "priority" in args:
         attributes["priority"] = args["priority"]
+    if "severity" in args:
+        attributes["severity"] = args["severity"]
     if "component" in args:
         attributes["component"] = args["component"]
     if "milestone" in args:
@@ -283,6 +264,25 @@ async def _handle_update(
         attributes["cc"] = args["cc"]
     if "keywords" in args:
         attributes["keywords"] = args["keywords"]
+    if "summary" in args:
+        attributes["summary"] = args["summary"]
+    if "type" in args:
+        attributes["type"] = args["type"]
+    # Description rewrite: convert from Markdown to TracWiki, mirroring
+    # the comment + create-ticket-description handling.
+    if "description" in args:
+        attributes["description"] = markdown_to_tracwiki(
+            args["description"]
+        )
+    # Workflow action: trigger a Trac workflow transition (e.g. accept,
+    # resolve, reopen). Action-specific input fields follow Trac's
+    # ``action_<action>_<action>_<field>`` convention (e.g.
+    # ``action_resolve_resolve_resolution``) and are forwarded by pattern.
+    if "action" in args:
+        attributes["action"] = args["action"]
+    for key, value in args.items():
+        if key.startswith("action_"):
+            attributes[key] = value
 
     # Update ticket (client handles optimistic locking)
     await run_sync(client.update_ticket, ticket_id, comment, attributes)
@@ -346,3 +346,21 @@ async def _handle_delete(
     )
 
 
+# ToolSpec list for registry-based dispatch
+TICKET_WRITE_SPECS: list[ToolSpec] = [
+    ToolSpec(
+        tool=TICKET_WRITE_TOOLS[0],
+        permissions=frozenset({"TICKET_CREATE"}),
+        handler=_handle_create,
+    ),
+    ToolSpec(
+        tool=TICKET_WRITE_TOOLS[1],
+        permissions=frozenset({"TICKET_MODIFY"}),
+        handler=_handle_update,
+    ),
+    ToolSpec(
+        tool=TICKET_WRITE_TOOLS[2],
+        permissions=frozenset({"TICKET_ADMIN"}),
+        handler=_handle_delete,
+    ),
+]

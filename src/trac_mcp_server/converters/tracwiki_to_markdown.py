@@ -187,13 +187,17 @@ class TracWikiParser:
     def _convert_headings(self, text: str) -> str:
         """Convert headings: = H1 = -> # H1.
 
-        Handle headings with or without trailing equals (trailing = is optional in TracWiki).
+        Handle headings with or without trailing equals (trailing = is
+        optional in TracWiki). Also strip an explicit-anchor suffix
+        (``== Heading == #anchor``) — the Markdown roundtrip target uses
+        slug-derived implicit anchors, so the explicit anchor token is
+        load-bearing on TracWiki side only.
         """
         # Process from H6 to H1 to avoid conflicts
         for level in range(6, 0, -1):
             marker = "=" * level
             text = re.sub(
-                rf"^{re.escape(marker)}\s+(.*?)(?:\s+{re.escape(marker)})?\s*$",
+                rf"^{re.escape(marker)}\s+(.*?)(?:\s+{re.escape(marker)})?(?:\s+#\S+)?\s*$",
                 r"%s \1" % ("#" * level),
                 text,
                 flags=re.MULTILINE,
@@ -398,13 +402,15 @@ class TracWikiParser:
         has_trailing_space = (
             cell_content.endswith(" ") and len(cell_content) > 1
         )
-        if has_leading_space and has_trailing_space:
-            return "center"
-        elif has_leading_space:
-            return "right"
-        elif has_trailing_space:
-            return "left"
-        return None
+        match (has_leading_space, has_trailing_space):
+            case (True, True):
+                return "center"
+            case (True, False):
+                return "right"
+            case (False, True):
+                return "left"
+            case _:
+                return None
 
     def _parse_tracwiki_row(
         self, row: str

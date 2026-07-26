@@ -12,7 +12,7 @@ The Trac MCP Server provides 27 tools organized into five categories:
 
 ## ping
 
-**Description:** Test Trac MCP server connectivity and return API version
+**Description:** Test Trac MCP server connectivity, validate configuration (TRAC_URL / TRAC_USERNAME / TRAC_PASSWORD), and return the Trac API version tuple
 
 **Parameters:**
 
@@ -221,6 +221,7 @@ The Trac MCP Server provides 27 tools organized into five categories:
 | `description` | string | **Yes** | - | Ticket body in Markdown (will be converted to TracWiki) |
 | `ticket_type` | string | No | `"defect"` | Ticket type: `defect`, `enhancement`, or `task` |
 | `priority` | string | No | - | Priority level (e.g., `blocker`, `critical`, `major`, `minor`, `trivial`) |
+| `severity` | string | No | - | Severity level (e.g., `critical`, `major`, `minor`) |
 | `component` | string | No | - | Component name |
 | `milestone` | string | No | - | Target milestone |
 | `owner` | string | No | - | Assignee username |
@@ -282,6 +283,7 @@ The Trac MCP Server provides 27 tools organized into five categories:
 | `comment` | string | No | - | Comment in Markdown (optional, max 10000 chars) |
 | `status` | string | No | - | New status |
 | `priority` | string | No | - | New priority |
+| `severity` | string | No | - | New severity |
 | `component` | string | No | - | New component |
 | `milestone` | string | No | - | New milestone |
 | `owner` | string | No | - | New owner |
