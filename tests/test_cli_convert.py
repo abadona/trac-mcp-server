@@ -450,7 +450,7 @@ def test_main_writes_to_clipboard(monkeypatch, capsys):
 def test_clipboard_write_error_returns_1(monkeypatch, capsys):
     """PyperclipException on copy() → exit 1 with 'clipboard write failed'."""
 
-    def raise_copy(t):
+    def raise_copy(_):
         raise pyperclip.PyperclipException("no mechanism")
 
     monkeypatch.setattr(pyperclip, "copy", raise_copy)
