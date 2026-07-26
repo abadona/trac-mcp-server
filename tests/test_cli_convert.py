@@ -2,6 +2,7 @@
 
 import argparse
 import io
+from unittest.mock import Mock
 
 import pyperclip
 import pytest
@@ -227,7 +228,7 @@ def test_main_writes_warnings_to_stderr_not_stdout(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.convert_text",
-        lambda *_, **__: fake_result,
+        Mock(return_value=fake_result),
     )
     monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
     exit_code = main(["--to", "tracwiki"])
@@ -451,7 +452,7 @@ def test_main_writes_to_clipboard(monkeypatch, capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_clipboard_write_error_returns_1(monkeypatch, capsys):
+def test_clipboard_write_error_returns_1(monkeypatch):
     """PyperclipException on copy() → exit 1 with 'clipboard write failed'."""
 
     def raise_copy(_):
@@ -491,7 +492,7 @@ def test_heading_anchors_off_omits_slug(monkeypatch, capsys):
     assert "#h" not in out
 
 
-def test_heading_anchors_ignored_on_tw_to_md(monkeypatch, capsys):
+def test_heading_anchors_ignored_on_tw_to_md(monkeypatch):
     """--heading-anchors off on the wrong direction exits 0 (silently ignored)."""
     monkeypatch.setattr("sys.stdin", io.StringIO("= H = #h"))
     exit_code = main(
@@ -580,7 +581,7 @@ def test_convert_text_exception_returns_exit_3_with_stderr_message(
     """convert_text() raising an exception → EXIT_CONVERSION_ERROR with stderr message."""
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.convert_text",
-        lambda *_, **__: (_ for _ in ()).throw(ValueError("bad input")),
+        Mock(side_effect=ValueError("bad input")),
     )
     monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
     exit_code = main(["--to", "tracwiki"])
@@ -595,7 +596,7 @@ def test_convert_text_exception_does_not_leak_traceback(
     """On converter exception, stderr must not contain traceback markers."""
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.convert_text",
-        lambda *_, **__: (_ for _ in ()).throw(ValueError("bad input")),
+        Mock(side_effect=ValueError("bad input")),
     )
     monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
     main(["--to", "tracwiki"])
@@ -608,23 +609,21 @@ def test_convert_text_exception_writes_no_stdout(monkeypatch, capsys):
     """On converter exception, stdout must be empty (no partial output)."""
     monkeypatch.setattr(
         "trac_mcp_server.cli.convert.convert_text",
-        lambda *_, **__: (_ for _ in ()).throw(ValueError("bad input")),
+        Mock(side_effect=ValueError("bad input")),
     )
     monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
     main(["--to", "tracwiki"])
     assert capsys.readouterr().out == ""
 
 
-def test_usage_error_still_exits_2_via_argparse(capsys):
+def test_usage_error_still_exits_2_via_argparse():
     """Invalid --to choice → SystemExit with code EXIT_USAGE_ERROR (2)."""
     with pytest.raises(SystemExit) as excinfo:
         main(["--to", "bogus"])
     assert excinfo.value.code == EXIT_USAGE_ERROR
 
 
-def test_runtime_error_missing_file_uses_exit_1_constant(
-    tmp_path, capsys
-):
+def test_runtime_error_missing_file_uses_exit_1_constant(tmp_path):
     """Missing positional FILE → EXIT_RUNTIME_ERROR (not literal 1)."""
     missing = tmp_path / "does_not_exist.md"
     exit_code = main([str(missing), "--to", "md"])
