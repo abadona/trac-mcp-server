@@ -1,8 +1,9 @@
-"""Smoke tests for the trac-convert CLI scaffold (Phase 11 + 12 + 13 + 14)."""
+"""Smoke tests for trac-convert CLI (Phase 11 + 12 + 13 + 14 + 15)."""
 
 import argparse
 import io
 
+import pyperclip
 import pytest
 
 from trac_mcp_server import __version__
@@ -353,3 +354,109 @@ def test_main_output_file_written_as_utf8(monkeypatch, tmp_path):
     assert exit_code == 0
     raw = out.read_bytes()
     assert raw.decode("utf-8") == "# Café ☕"
+
+
+# ---------- clipboard I/O integration tests ----------
+
+
+def test_from_clipboard_flag_defaults_to_false():
+    """--from-clipboard defaults to False when not provided."""
+    args = build_parser().parse_args(["--to", "md"])
+    assert args.from_clipboard is False
+
+
+def test_to_clipboard_flag_defaults_to_false():
+    """--to-clipboard defaults to False when not provided."""
+    args = build_parser().parse_args(["--to", "md"])
+    assert args.to_clipboard is False
+
+
+def test_from_clipboard_flag_parsed_as_true():
+    """--from-clipboard sets from_clipboard to True."""
+    args = build_parser().parse_args(["--from-clipboard", "--to", "md"])
+    assert args.from_clipboard is True
+
+
+def test_to_clipboard_flag_parsed_as_true():
+    """--to-clipboard sets to_clipboard to True."""
+    args = build_parser().parse_args(["--to", "md", "--to-clipboard"])
+    assert args.to_clipboard is True
+
+
+def test_from_clipboard_and_file_mutually_exclusive(tmp_path, capsys):
+    """--from-clipboard and positional FILE are mutually exclusive."""
+    in_file = tmp_path / "in.md"
+    in_file.write_text("# Hello", encoding="utf-8")
+    exit_code = main(["--from-clipboard", str(in_file), "--to", "md"])
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "--from-clipboard" in err
+    assert "FILE" in err
+    assert "mutually exclusive" in err
+
+
+def test_to_clipboard_and_output_mutually_exclusive(tmp_path, capsys):
+    """--to-clipboard and --output are mutually exclusive."""
+    exit_code = main(
+        [
+            "--to",
+            "md",
+            "--to-clipboard",
+            "--output",
+            str(tmp_path / "out.md"),
+        ]
+    )
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "--to-clipboard" in err
+    assert "--output" in err
+    assert "mutually exclusive" in err
+
+
+def test_main_reads_from_clipboard(monkeypatch, capsys):
+    """--from-clipboard reads from pyperclip.paste() and converts."""
+    monkeypatch.setattr(pyperclip, "paste", lambda: "= Hello =")
+    exit_code = main(["--from-clipboard", "--to", "md"])
+    assert exit_code == 0
+    assert capsys.readouterr().out.startswith("# Hello")
+
+
+def test_clipboard_read_error_returns_1(monkeypatch, capsys):
+    """PyperclipException on paste() → exit 1 with 'clipboard read failed'."""
+
+    def raise_paste():
+        raise pyperclip.PyperclipException("no mechanism")
+
+    monkeypatch.setattr(pyperclip, "paste", raise_paste)
+    exit_code = main(["--from-clipboard", "--to", "md"])
+    assert exit_code == 1
+    assert "clipboard read failed" in capsys.readouterr().err
+
+
+def test_main_writes_to_clipboard(monkeypatch, capsys):
+    """--to-clipboard passes converted text to pyperclip.copy(); stdout empty."""
+    copied = []
+    monkeypatch.setattr(pyperclip, "copy", lambda t: copied.append(t))
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
+    exit_code = main(
+        ["--from", "md", "--to", "tracwiki", "--to-clipboard"]
+    )
+    assert exit_code == 0
+    assert len(copied) == 1
+    assert "= Hello" in copied[0]
+    assert capsys.readouterr().out == ""
+
+
+def test_clipboard_write_error_returns_1(monkeypatch, capsys):
+    """PyperclipException on copy() → exit 1 with 'clipboard write failed'."""
+
+    def raise_copy(t):
+        raise pyperclip.PyperclipException("no mechanism")
+
+    monkeypatch.setattr(pyperclip, "copy", raise_copy)
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
+    exit_code = main(
+        ["--from", "md", "--to", "tracwiki", "--to-clipboard"]
+    )
+    assert exit_code == 1
+    assert "clipboard write failed" in capsys.readouterr().err
