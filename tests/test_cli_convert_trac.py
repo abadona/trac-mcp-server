@@ -622,7 +622,7 @@ def test_from_wiki_password_never_printed(monkeypatch, capsys):
 
 
 def test_from_wiki_output_to_clipboard_writes_converted_text(
-    monkeypatch, capsys
+    monkeypatch,
 ):
     """--from-wiki + --to-clipboard writes converted markdown to clipboard."""
     _mock_valid_env(monkeypatch)
@@ -689,7 +689,7 @@ def test_to_wiki_mutex_with_to_clipboard_exits_1_runtime_error(capsys):
     assert "--to-wiki and --to-clipboard are mutually exclusive" in err
 
 
-def test_to_wiki_alone_does_not_require_to_flag(monkeypatch, capsys):
+def test_to_wiki_alone_does_not_require_to_flag(monkeypatch):
     """--to-wiki without --to does not fail with '--to is required'."""
     _mock_valid_env(monkeypatch)
     mock_instance = _mock_tracclient(put_wiki_page_return=_PUT_OK)
@@ -727,7 +727,7 @@ def test_to_wiki_happy_path_writes_converted_tracwiki_via_put_wiki_page(
     assert capsys.readouterr().out == ""
 
 
-def test_to_wiki_from_tracwiki_is_passthrough(monkeypatch, capsys):
+def test_to_wiki_from_tracwiki_is_passthrough(monkeypatch):
     """--to-wiki with tracwiki input passes content verbatim (source==target)."""
     raw = "= Existing =\n\nAs-is"
     _mock_valid_env(monkeypatch)
@@ -744,7 +744,7 @@ def test_to_wiki_from_tracwiki_is_passthrough(monkeypatch, capsys):
     assert mock_instance.put_wiki_page.call_args.args[1] == raw
 
 
-def test_to_wiki_silently_overrides_explicit_to_md(monkeypatch, capsys):
+def test_to_wiki_silently_overrides_explicit_to_md(monkeypatch):
     """--to-wiki silently overrides --to md: content is TracWiki, not Markdown."""
     _mock_valid_env(monkeypatch)
     mock_instance = _mock_tracclient(put_wiki_page_return=_PUT_OK)
@@ -763,7 +763,7 @@ def test_to_wiki_silently_overrides_explicit_to_md(monkeypatch, capsys):
 
 
 def test_to_wiki_default_comment_is_updated_via_trac_convert(
-    monkeypatch, capsys
+    monkeypatch,
 ):
     """Default --wiki-comment is 'Updated via trac-convert'."""
     _mock_valid_env(monkeypatch)
@@ -784,7 +784,7 @@ def test_to_wiki_default_comment_is_updated_via_trac_convert(
 
 
 def test_to_wiki_wiki_comment_flag_overrides_default_comment(
-    monkeypatch, capsys
+    monkeypatch,
 ):
     """--wiki-comment overrides the default comment string."""
     _mock_valid_env(monkeypatch)
@@ -1004,7 +1004,7 @@ def test_to_wiki_stdout_is_empty_on_success(monkeypatch, capsys):
 
 
 def test_from_wiki_to_to_wiki_end_to_end_copies_page_verbatim(
-    monkeypatch, capsys
+    monkeypatch,
 ):
     """Phase 21+22 round-trip: --from-wiki + --to-wiki copies page verbatim.
 

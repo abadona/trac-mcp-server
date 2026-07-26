@@ -176,7 +176,7 @@ def _put_wiki_page(
         )  # password-file diagnostic already written
 
     try:
-        config, _sources = bootstrap_config(overrides)
+        config, _ = bootstrap_config(overrides)
     except ValueError:
         sys.stderr.write(
             "trac-convert: no Trac credentials found.\n"
