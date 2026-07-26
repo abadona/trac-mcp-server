@@ -1466,3 +1466,132 @@ def test_io_matrix_clipboard_to_clipboard(monkeypatch, capsys):
     assert exit_code == EXIT_OK
     assert capsys.readouterr().out == ""
     assert captured["text"].startswith(IO_MATRIX_EXPECTED_TW_START)
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Cross-mode warning propagation + encoding + empty-input edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_warnings_reach_stderr_when_output_is_file(
+    monkeypatch, tmp_path, capsys
+):
+    """Warnings still reach stderr when destination is --output FILE.
+
+    Uses monkeypatch to inject a synthetic warning (same pattern as
+    test_main_writes_warnings_to_stderr_not_stdout).
+    """
+    fake_result = ConversionResult(
+        text="= Title = #title\nBody paragraph.",
+        source_format="markdown",
+        target_format="tracwiki",
+        converted=True,
+        warnings=["lossy: unknown construct"],
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.convert_text",
+        Mock(return_value=fake_result),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(IO_MATRIX_INPUT))
+    out_file = tmp_path / "out.tw"
+    exit_code = main(["--to", "tracwiki", "-o", str(out_file)])
+    assert exit_code == EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert out_file.exists()
+    assert "warning: lossy: unknown construct" in captured.err
+
+
+def test_warnings_reach_stderr_when_output_is_clipboard(
+    monkeypatch, capsys
+):
+    """Warnings still reach stderr when destination is --to-clipboard.
+
+    Uses monkeypatch to inject a synthetic warning so the test is
+    independent of which converter constructs trigger real warnings.
+    """
+    fake_result = ConversionResult(
+        text="= Title = #title\nBody paragraph.",
+        source_format="markdown",
+        target_format="tracwiki",
+        converted=True,
+        warnings=["lossy: unknown construct"],
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.convert_text",
+        Mock(return_value=fake_result),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(IO_MATRIX_INPUT))
+    copied = []
+    monkeypatch.setattr(pyperclip, "copy", lambda t: copied.append(t))
+    exit_code = main(["--to", "tracwiki", "--to-clipboard"])
+    assert exit_code == EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert len(copied) == 1
+    assert "warning: lossy: unknown construct" in captured.err
+
+
+def test_non_ascii_content_preserved_through_stdin_stdout(
+    monkeypatch, capsys
+):
+    """Non-ASCII UTF-8 characters survive a stdin → stdout pass-through (md→md)."""
+    non_ascii = "# Café ☕ — naïve\n"
+    monkeypatch.setattr("sys.stdin", io.StringIO(non_ascii))
+    exit_code = main(["--from", "md", "--to", "md"])
+    assert exit_code == EXIT_OK
+    assert capsys.readouterr().out == non_ascii
+
+
+def test_non_ascii_content_preserved_through_file_to_file(tmp_path):
+    """Non-ASCII UTF-8 survives a file → file pass-through; raw bytes confirm UTF-8 write."""
+    non_ascii = "# Café ☕ — naïve\n"
+    in_file = tmp_path / "in.md"
+    in_file.write_text(non_ascii, encoding="utf-8")
+    out_file = tmp_path / "out.md"
+    exit_code = main(
+        [
+            str(in_file),
+            "--from",
+            "md",
+            "--to",
+            "md",
+            "-o",
+            str(out_file),
+        ]
+    )
+    assert exit_code == EXIT_OK
+    raw = out_file.read_bytes()
+    # Confirm the file was written as UTF-8, not latin-1 or ascii
+    assert raw.decode("utf-8") == non_ascii
+    # Spot-check: é is encoded as \xc3\xa9 in UTF-8
+    assert b"\xc3\xa9" in raw
+
+
+def test_crlf_input_from_stdin_does_not_crash(monkeypatch, capsys):
+    """CRLF line endings in stdin input do not crash the CLI (exit 0, non-empty stdout)."""
+    crlf_input = "# H\r\n\r\nBody\r\n"
+    monkeypatch.setattr("sys.stdin", io.StringIO(crlf_input))
+    exit_code = main(["--from", "md", "--to", "tracwiki"])
+    assert exit_code == EXIT_OK
+    out = capsys.readouterr().out
+    assert out  # non-empty: converter produced some output
+
+
+def test_empty_input_returns_exit_ok_from_file(tmp_path, capsys):
+    """An empty input file returns EXIT_OK with empty stdout (file source)."""
+    empty_file = tmp_path / "empty.md"
+    empty_file.write_text("", encoding="utf-8")
+    exit_code = main([str(empty_file), "--to", "md"])
+    assert exit_code == EXIT_OK
+    assert capsys.readouterr().out == ""
+
+
+def test_empty_input_returns_exit_ok_from_clipboard(
+    monkeypatch, capsys
+):
+    """An empty clipboard string returns EXIT_OK with empty stdout (clipboard source)."""
+    monkeypatch.setattr(pyperclip, "paste", lambda: "")
+    exit_code = main(["--from-clipboard", "--to", "md"])
+    assert exit_code == EXIT_OK
+    assert capsys.readouterr().out == ""
