@@ -628,3 +628,73 @@ def test_runtime_error_missing_file_uses_exit_1_constant(tmp_path):
     missing = tmp_path / "does_not_exist.md"
     exit_code = main([str(missing), "--to", "md"])
     assert exit_code == EXIT_RUNTIME_ERROR
+
+
+# ---------------------------------------------------------------------------
+# Phase 17: --quiet flag
+# ---------------------------------------------------------------------------
+
+
+def test_quiet_flag_defaults_to_false():
+    """--quiet defaults to False when not provided."""
+    args = build_parser().parse_args(["--to", "md"])
+    assert args.quiet is False
+
+
+def test_quiet_flag_short_and_long_forms_equivalent():
+    """-q and --quiet both set args.quiet to True."""
+    short = build_parser().parse_args(["--to", "md", "-q"]).quiet
+    long = build_parser().parse_args(["--to", "md", "--quiet"]).quiet
+    assert short is True
+    assert long is True
+
+
+def test_quiet_suppresses_warning_lines_on_stderr(monkeypatch, capsys):
+    """--quiet suppresses warning: lines; stdout still has converted text."""
+    fake_result = ConversionResult(
+        text="output text",
+        source_format="markdown",
+        target_format="tracwiki",
+        converted=True,
+        warnings=["lossy: table dropped"],
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.convert_text",
+        Mock(return_value=fake_result),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
+    exit_code = main(["--to", "tracwiki", "--quiet"])
+    assert exit_code == EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "output text" in captured.out
+
+
+def test_quiet_does_not_suppress_trac_convert_errors(tmp_path, capsys):
+    """--quiet does NOT suppress trac-convert: error lines on stderr."""
+    missing = tmp_path / "does_not_exist.md"
+    exit_code = main([str(missing), "--to", "md", "--quiet"])
+    assert exit_code == EXIT_RUNTIME_ERROR
+    err = capsys.readouterr().err
+    assert "trac-convert: cannot read input file" in err
+
+
+def test_quiet_preserves_exit_code_ok(monkeypatch, capsys):
+    """Happy path with warnings + --quiet → exit 0, empty stderr, stdout has output."""
+    fake_result = ConversionResult(
+        text="converted output",
+        source_format="markdown",
+        target_format="tracwiki",
+        converted=True,
+        warnings=["lossy: table dropped"],
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.convert_text",
+        Mock(return_value=fake_result),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
+    exit_code = main(["--to", "tracwiki", "--quiet"])
+    assert exit_code == EXIT_OK
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "converted output" in captured.out
