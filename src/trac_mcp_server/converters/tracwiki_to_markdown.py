@@ -189,18 +189,20 @@ class TracWikiParser:
         # Rendering mode is controlled by self._unknown_macros (set via
         # --unknown-macros CLI flag).  Known macros (Image, BR) are already
         # handled above and are unaffected by this setting.
-        def handle_unknown_macro(match):
-            macro_name = match.group(1)
-            args = match.group(2) if match.group(2) else ""
+        def handle_unknown_macro(m: re.Match[str]) -> str:
+            macro_name = m.group(1)
+            args = m.group(2) if m.group(2) else ""
             match self._unknown_macros:
                 case "bracket":
                     # Current default: emit a placeholder restored to [MACRO: ...]
                     return f"\x00MACRO:{macro_name}{args}\x00"
                 case "preserve":
                     # Leave the original [[MacroName(args)]] literal unchanged.
-                    return match.group(0)
+                    return m.group(0)
                 case "drop":
                     # Silently omit the macro from the output.
+                    return ""
+                case _:
                     return ""
 
         text = re.sub(
