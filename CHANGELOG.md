@@ -4,6 +4,23 @@ All notable changes to trac-mcp-server will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.2.0] - 2026-07-26
+
+### Added
+- New `trac-convert` CLI binary (second `[project.scripts]` entry point) — standalone TracWiki ↔ Markdown converter usable outside the MCP server
+- `--from {md,tracwiki,auto}` and `--to {md,tracwiki}` format flags with `auto` detection via `converters.common.detect_format`
+- stdin → stdout as default I/O mode (Unix-pipe friendly, binary-safe, no spurious trailing newlines)
+- Positional `FILE` argument and `-o/--output FILE` flag for file I/O with clear errors on missing/unwritable paths
+- `--from-clipboard` and `--to-clipboard` flags via `pyperclip` for cross-platform clipboard I/O (Linux/macOS/Windows/Wayland)
+- `--heading-anchors {strip,preserve}` and `--unknown-macros {bracket,preserve}` flags exposing converter kwargs (keyword-only so 7 MCP tool call sites keep working unmodified; wrong-direction flags silently ignored)
+- `--verbose/-v` and `--quiet/-q` mutually exclusive flags: `-v` emits three `info:` lines to stderr (source format, bytes read, bytes written); `-q` suppresses warnings
+- Standardized exit codes: `EXIT_OK=0`, `EXIT_RUNTIME_ERROR=1` (I/O, clipboard, mutex), `EXIT_USAGE_ERROR=2` (argparse), `EXIT_CONVERSION_ERROR=3` (exceptions inside `convert_text()`)
+- Full integration test suite for `trac-convert`: 9-cell source×destination I/O matrix (stdin/file/clipboard × stdout/file/clipboard), md↔tw roundtrip fixtures with expected-divergence assertions, cross-mode warning routing, UTF-8/CRLF/empty-input edge cases, 10 subprocess entry-point smoke tests exercising real OS pipe fd separation and console_scripts wiring (988 passing, up from 741 in v2.1.0)
+
+### Changed
+- `pyperclip>=1.8.2` added as a **required** dependency (not optional) — enables clipboard I/O out-of-the-box on all platforms
+- Tool count remains 27 MCP tools (unchanged from v2.1.3); `trac-convert` is a separate binary, not an MCP tool
+
 ## [2.1.3] - 2026-07-25
 
 ### Added
