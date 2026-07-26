@@ -5,6 +5,7 @@ Phases 12-17 layer format flags, I/O modes, stdin/stdout wiring,
 file I/O, clipboard I/O, converter options, error handling, and
 verbosity flags (--quiet, --verbose) on top of this skeleton.
 # Phase 20 adds Trac wiring: --trac-* flags, --check-trac, EXIT_TRAC.
+# Phase 21 adds --from-wiki: fetch TracWiki pages via TracClient.
 """
 
 import argparse
@@ -260,6 +261,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--from-wiki",
+        dest="from_wiki",
+        default=None,
+        metavar="PAGE",
+        help=(
+            "Fetch input from a Trac wiki page (source format is TracWiki). "
+            "Mutually exclusive with FILE and --from-clipboard."
+        ),
+    )
+    parser.add_argument(
         "--check-trac",
         dest="check_trac",
         action="store_true",
@@ -377,6 +388,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.target_format is None:
         sys.stderr.write("trac-convert: --to is required\n")
         return EXIT_USAGE_ERROR
+
+    # --- --from-wiki mutex validation ---
+    if args.from_wiki is not None:
+        if args.input_file is not None:
+            sys.stderr.write(
+                "trac-convert: --from-wiki and FILE are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
+        if args.from_clipboard:
+            sys.stderr.write(
+                "trac-convert: --from-wiki and --from-clipboard are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
 
     # --- mutual exclusion validation ---
     if args.from_clipboard and args.input_file is not None:
