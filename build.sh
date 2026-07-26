@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build standalone binary for trac-mcp-server using PyInstaller
+# Build standalone binaries for trac-mcp-server and trac-convert using PyInstaller
 
 set -e
 
 echo "==================================================================="
-echo "  Building standalone binary: trac-mcp-server"
+echo "  Building standalone binaries: trac-mcp-server + trac-convert"
 echo "==================================================================="
 echo ""
 
@@ -62,20 +62,9 @@ HIDDEN_IMPORTS=(
     trac_mcp_server.mcp.tools.wiki_write
     trac_mcp_server.mcp.tools.wiki_file
     trac_mcp_server.mcp.tools.milestone
-    trac_mcp_server.mcp.tools.sync
     trac_mcp_server.mcp.tools.system
     trac_mcp_server.mcp.resources
     trac_mcp_server.mcp.resources.wiki
-
-    # sync/ subpackage
-    trac_mcp_server.sync
-    trac_mcp_server.sync.engine
-    trac_mcp_server.sync.mapper
-    trac_mcp_server.sync.merger
-    trac_mcp_server.sync.models
-    trac_mcp_server.sync.reporter
-    trac_mcp_server.sync.resolver
-    trac_mcp_server.sync.state
 
     # Third-party libraries
     xmlrpc.client
@@ -97,65 +86,74 @@ HIDDEN_IMPORTS=(
     merge3
 )
 
+# Extra hidden imports for trac-convert (clipboard support)
+CONVERT_EXTRA_IMPORTS=(
+    pyperclip
+)
+
 # Build hidden-import flags
-IMPORT_FLAGS=""
+SERVER_IMPORT_FLAGS=""
 for mod in "${HIDDEN_IMPORTS[@]}"; do
-    IMPORT_FLAGS="$IMPORT_FLAGS --hidden-import $mod"
+    SERVER_IMPORT_FLAGS="$SERVER_IMPORT_FLAGS --hidden-import $mod"
 done
 
-# --- Build --------------------------------------------------------------------
+CONVERT_IMPORT_FLAGS=""
+for mod in "${HIDDEN_IMPORTS[@]}"; do
+    CONVERT_IMPORT_FLAGS="$CONVERT_IMPORT_FLAGS --hidden-import $mod"
+done
+for mod in "${CONVERT_EXTRA_IMPORTS[@]}"; do
+    CONVERT_IMPORT_FLAGS="$CONVERT_IMPORT_FLAGS --hidden-import $mod"
+done
 
-echo "Running PyInstaller..."
+# --- Build: trac-mcp-server ---------------------------------------------------
+
+echo "Running PyInstaller for trac-mcp-server..."
 pyinstaller \
     --onefile \
     --console \
     --name trac-mcp-server \
     --paths src \
-    $IMPORT_FLAGS \
+    $SERVER_IMPORT_FLAGS \
     --exclude-module logfire \
     --clean \
     src/trac_mcp_server/mcp/__main__.py
 
+# --- Build: trac-convert ------------------------------------------------------
+
+echo "Running PyInstaller for trac-convert..."
+pyinstaller \
+    --onefile \
+    --console \
+    --name trac-convert \
+    --paths src \
+    $CONVERT_IMPORT_FLAGS \
+    --exclude-module logfire \
+    --clean \
+    src/trac_mcp_server/cli/__main__.py
+
 # --- Verify -------------------------------------------------------------------
 
-if [ -f "dist/trac-mcp-server" ]; then
+verify_binary() {
+    local name=$1
+    local path
+    if [ -f "dist/$name" ]; then
+        path="dist/$name"
+    elif [ -f "dist/$name.exe" ]; then
+        path="dist/$name.exe"
+    else
+        echo "ERROR: dist/$name (or .exe) not found after build!"
+        return 1
+    fi
     echo ""
-    echo "==================================================================="
-    echo "  Build successful!"
-    echo "==================================================================="
-    echo ""
-    echo "Binary location: $(pwd)/dist/trac-mcp-server"
-    echo "Binary size: $(du -h dist/trac-mcp-server | cut -f1)"
-    echo ""
+    echo "  $name → $path ($(du -h $path | cut -f1))"
+    echo "  Smoke: $(./$path --version)"
+}
 
-    # Smoke test
-    echo "Smoke test..."
-    ./dist/trac-mcp-server --version
-    echo ""
-
-    echo "Build complete! You can run the binary with:"
-    echo "  ./dist/trac-mcp-server --help"
-    echo ""
-elif [ -f "dist/trac-mcp-server.exe" ]; then
-    echo ""
-    echo "==================================================================="
-    echo "  Build successful!"
-    echo "==================================================================="
-    echo ""
-    echo "Binary location: $(pwd)/dist/trac-mcp-server.exe"
-    echo "Binary size: $(du -h dist/trac-mcp-server.exe | cut -f1)"
-    echo ""
-
-    # Smoke test
-    echo "Smoke test..."
-    ./dist/trac-mcp-server.exe --version
-    echo ""
-
-    echo "Build complete! You can run the binary with:"
-    echo "  ./dist/trac-mcp-server.exe --help"
-    echo ""
-else
-    echo ""
-    echo "ERROR: Binary not found after build!"
-    exit 1
-fi
+echo ""
+echo "==================================================================="
+echo "  Build successful!"
+echo "==================================================================="
+verify_binary trac-mcp-server
+verify_binary trac-convert
+echo ""
+echo "Build complete. Binaries in dist/."
