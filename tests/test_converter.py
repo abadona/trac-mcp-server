@@ -610,6 +610,86 @@ See screenshot: [[Image(error.png)]]"""
         self.assertEqual(result.text, "---")
 
 
+class TestUnknownMacrosOption(unittest.TestCase):
+    """Tests for the unknown_macros kwarg added in Phase 16.
+
+    Verifies that the default "bracket" preserves existing behavior and that
+    "preserve" / "drop" produce the expected output without disturbing known
+    macros (Image, BR) or the lossy-elements warning.
+    """
+
+    def test_default_bracket(self):
+        """unknown_macros="bracket" (default) emits [MACRO: Name]."""
+        result = tracwiki_to_markdown("[[PageOutline]]")
+        self.assertIn("[MACRO: PageOutline]", result.text)
+
+    def test_bracket_explicit(self):
+        """Explicit unknown_macros="bracket" matches the default."""
+        default = tracwiki_to_markdown("[[PageOutline]]")
+        explicit = tracwiki_to_markdown(
+            "[[PageOutline]]", unknown_macros="bracket"
+        )
+        self.assertEqual(default.text, explicit.text)
+
+    def test_preserve_keeps_literal(self):
+        """unknown_macros="preserve" leaves [[MacroName]] verbatim."""
+        result = tracwiki_to_markdown(
+            "[[PageOutline]]", unknown_macros="preserve"
+        )
+        self.assertIn("[[PageOutline]]", result.text)
+        self.assertNotIn("[MACRO:", result.text)
+
+    def test_drop_removes_macro(self):
+        """unknown_macros="drop" silently omits the macro."""
+        result = tracwiki_to_markdown(
+            "before [[PageOutline]] after", unknown_macros="drop"
+        )
+        self.assertNotIn("PageOutline", result.text)
+        self.assertIn("before", result.text)
+        self.assertIn("after", result.text)
+
+    def test_known_macros_unaffected_bracket(self):
+        """Image macro is converted to Markdown img regardless of mode."""
+        result = tracwiki_to_markdown(
+            "[[Image(foo.png)]]", unknown_macros="bracket"
+        )
+        self.assertIn("![](foo.png)", result.text)
+
+    def test_known_macros_unaffected_preserve(self):
+        """Image macro converts correctly under preserve mode too."""
+        result = tracwiki_to_markdown(
+            "[[Image(foo.png)]]", unknown_macros="preserve"
+        )
+        self.assertIn("![](foo.png)", result.text)
+
+    def test_known_macros_unaffected_drop(self):
+        """Image macro converts correctly under drop mode too."""
+        result = tracwiki_to_markdown(
+            "[[Image(foo.png)]]", unknown_macros="drop"
+        )
+        self.assertIn("![](foo.png)", result.text)
+
+    def test_macro_with_args_preserve(self):
+        """[[TOC(depth=2)]] under preserve stays literal."""
+        result = tracwiki_to_markdown(
+            "[[TOC(depth=2)]]", unknown_macros="preserve"
+        )
+        self.assertIn("[[TOC(depth=2)]]", result.text)
+
+    def test_warning_fires_under_all_modes(self):
+        """_detect_lossy_elements warning fires regardless of rendering mode."""
+        for mode in ("bracket", "preserve", "drop"):
+            with self.subTest(mode=mode):
+                result = tracwiki_to_markdown(
+                    "[[PageOutline]]",
+                    unknown_macros=mode,  # type: ignore[arg-type]
+                )
+                self.assertTrue(
+                    any("Unknown macros" in w for w in result.warnings),
+                    f"Expected 'Unknown macros' warning in mode={mode!r}",
+                )
+
+
 class TestTracWikiEnhancements(unittest.TestCase):
     """Test TracWiki to Markdown enhancements (macros, TracLinks, tables, etc)."""
 

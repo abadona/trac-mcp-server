@@ -1,16 +1,35 @@
 """TracWiki to Markdown conversion using regex patterns."""
 
 import re
+from typing import Literal
 
 from .common import ConversionResult, tracwiki_to_markdown_lang
+
+# Type alias for the unknown_macros rendering mode.
+UnknownMacros = Literal["bracket", "preserve", "drop"]
 
 
 class TracWikiParser:
     """Parser for converting TracWiki syntax to Markdown format."""
 
-    def __init__(self):
-        """Initialize parser with empty warnings list."""
+    def __init__(self, *, unknown_macros: UnknownMacros = "bracket"):
+        """Initialize parser with empty warnings list.
+
+        Args:
+            unknown_macros: Controls how unrecognized ``[[MacroName]]`` tokens
+                are rendered in the Markdown output.
+
+                - ``"bracket"`` (default): emit ``[MACRO: MacroName]`` — makes
+                  the macro visible but non-functional; current behavior.
+                - ``"preserve"``: leave ``[[MacroName]]`` literal in the output
+                  so the TracWiki syntax survives the conversion unchanged.
+                - ``"drop"``: silently omit the macro from the output.
+
+                Controlled by the ``--unknown-macros`` CLI flag.  Known macros
+                (``Image``, ``BR``) are unaffected regardless of this setting.
+        """
         self.warnings: list[str] = []
+        self._unknown_macros = unknown_macros
 
     def parse(self, tracwiki_text: str) -> ConversionResult:
         """
@@ -166,19 +185,27 @@ class TracWikiParser:
         # These should pass through unchanged - they're not ambiguous with Markdown
         # Already valid in plaintext, agents can understand the notation
 
-        # Preserve unknown macros as plaintext for reference
-        # [[PageOutline]], [[TOC]], [[RecentChanges]] etc.
-        # Convert [[MacroName(args)]] to [MACRO: MacroName(args)]
-        # This makes them visible but non-functional (lossy but documented)
-        # Use a placeholder that won't be caught by link patterns
-        def preserve_unknown_macro(match):
+        # Handle unknown macros: [[PageOutline]], [[TOC]], [[RecentChanges]] etc.
+        # Rendering mode is controlled by self._unknown_macros (set via
+        # --unknown-macros CLI flag).  Known macros (Image, BR) are already
+        # handled above and are unaffected by this setting.
+        def handle_unknown_macro(match):
             macro_name = match.group(1)
             args = match.group(2) if match.group(2) else ""
-            return f"\x00MACRO:{macro_name}{args}\x00"
+            match self._unknown_macros:
+                case "bracket":
+                    # Current default: emit a placeholder restored to [MACRO: ...]
+                    return f"\x00MACRO:{macro_name}{args}\x00"
+                case "preserve":
+                    # Leave the original [[MacroName(args)]] literal unchanged.
+                    return match.group(0)
+                case "drop":
+                    # Silently omit the macro from the output.
+                    return ""
 
         text = re.sub(
             r"\[\[(?!Image|BR)(\w+)(\([^)]*\))?\]\]",
-            preserve_unknown_macro,
+            handle_unknown_macro,
             text,
             flags=re.IGNORECASE,
         )
@@ -506,7 +533,9 @@ class TracWikiParser:
         )
 
 
-def tracwiki_to_markdown(tracwiki_text: str) -> ConversionResult:
+def tracwiki_to_markdown(
+    tracwiki_text: str, *, unknown_macros: UnknownMacros = "bracket"
+) -> ConversionResult:
     """
     Convert TracWiki text to Markdown format.
 
@@ -515,9 +544,14 @@ def tracwiki_to_markdown(tracwiki_text: str) -> ConversionResult:
 
     Args:
         tracwiki_text: TracWiki formatted text
+        unknown_macros: How to render unrecognized ``[[Macro]]`` tokens.
+            ``"bracket"`` (default) emits ``[MACRO: Name]``,
+            ``"preserve"`` leaves ``[[Name]]`` literal,
+            ``"drop"`` silently omits the macro.
+            Mirrors the ``--unknown-macros`` CLI flag.
 
     Returns:
         ConversionResult with Markdown text and warnings about lossy conversions
     """
-    parser = TracWikiParser()
+    parser = TracWikiParser(unknown_macros=unknown_macros)
     return parser.parse(tracwiki_text)
