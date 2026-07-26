@@ -1,4 +1,4 @@
-"""Smoke tests for trac-convert CLI (Phase 11 + 12 + 13 + 14 + 15)."""
+"""Smoke tests for trac-convert CLI (Phase 11 + 12 + 13 + 14 + 15 + 16 + 17)."""
 
 import argparse
 import io
@@ -8,6 +8,10 @@ import pytest
 
 from trac_mcp_server import __version__
 from trac_mcp_server.cli.convert import (
+    EXIT_CONVERSION_ERROR,
+    EXIT_OK,
+    EXIT_RUNTIME_ERROR,
+    EXIT_USAGE_ERROR,
     build_parser,
     convert_text,
     main,
@@ -548,3 +552,80 @@ def test_help_lists_new_flags(capsys):
     out = capsys.readouterr().out
     assert "--heading-anchors" in out
     assert "--unknown-macros" in out
+
+
+# ---------------------------------------------------------------------------
+# Phase 17: exit-code constants + conversion-error guard
+# ---------------------------------------------------------------------------
+
+
+def test_exit_code_constants_have_expected_values():
+    """EXIT_* constants have values (0, 1, 2, 3) in order."""
+    assert (
+        EXIT_OK,
+        EXIT_RUNTIME_ERROR,
+        EXIT_USAGE_ERROR,
+        EXIT_CONVERSION_ERROR,
+    ) == (
+        0,
+        1,
+        2,
+        3,
+    )
+
+
+def test_convert_text_exception_returns_exit_3_with_stderr_message(
+    monkeypatch, capsys
+):
+    """convert_text() raising an exception → EXIT_CONVERSION_ERROR with stderr message."""
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.convert_text",
+        lambda *_, **__: (_ for _ in ()).throw(ValueError("bad input")),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
+    exit_code = main(["--to", "tracwiki"])
+    assert exit_code == EXIT_CONVERSION_ERROR
+    err = capsys.readouterr().err
+    assert "trac-convert: conversion failed: bad input" in err
+
+
+def test_convert_text_exception_does_not_leak_traceback(
+    monkeypatch, capsys
+):
+    """On converter exception, stderr must not contain traceback markers."""
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.convert_text",
+        lambda *_, **__: (_ for _ in ()).throw(ValueError("bad input")),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
+    main(["--to", "tracwiki"])
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert 'File "' not in err
+
+
+def test_convert_text_exception_writes_no_stdout(monkeypatch, capsys):
+    """On converter exception, stdout must be empty (no partial output)."""
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.convert_text",
+        lambda *_, **__: (_ for _ in ()).throw(ValueError("bad input")),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
+    main(["--to", "tracwiki"])
+    assert capsys.readouterr().out == ""
+
+
+def test_usage_error_still_exits_2_via_argparse(capsys):
+    """Invalid --to choice → SystemExit with code EXIT_USAGE_ERROR (2)."""
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--to", "bogus"])
+    assert excinfo.value.code == EXIT_USAGE_ERROR
+
+
+def test_runtime_error_missing_file_uses_exit_1_constant(
+    tmp_path, capsys
+):
+    """Missing positional FILE → EXIT_RUNTIME_ERROR (not literal 1)."""
+    missing = tmp_path / "does_not_exist.md"
+    exit_code = main([str(missing), "--to", "md"])
+    assert exit_code == EXIT_RUNTIME_ERROR
