@@ -1,0 +1,336 @@
+"""Tests for Phase 20 CLI additions: --trac-* flags, --check-trac diagnostic,
+EXIT_TRAC, and regression guards against premature --from-wiki/--to-wiki
+scaffolding."""
+
+import xmlrpc.client
+from unittest.mock import MagicMock
+
+import pytest
+import requests.exceptions  # noqa: F401
+
+from trac_mcp_server.cli.convert import (
+    EXIT_OK,
+    EXIT_TRAC,
+    EXIT_USAGE_ERROR,
+    main,
+)
+from trac_mcp_server.core.client import TracClient
+
+# ---------------------------------------------------------------------------
+# Local helpers
+# ---------------------------------------------------------------------------
+
+_TEST_URL = "https://trac.example.com"
+_TEST_USER = "testuser"
+_TEST_PASS = "testpass"
+
+
+def _mock_valid_env(monkeypatch):
+    """Set valid Trac env vars to safe test values."""
+    monkeypatch.setenv("TRAC_URL", _TEST_URL)
+    monkeypatch.setenv("TRAC_USERNAME", _TEST_USER)
+    monkeypatch.setenv("TRAC_PASSWORD", _TEST_PASS)
+
+
+def _mock_tracclient(
+    validate_return="1.2.0", validate_side_effect=None
+):
+    """Return a MagicMock(spec=TracClient) with configurable validate_connection.
+
+    Args:
+        validate_return: The value validate_connection() should return on success.
+        validate_side_effect: If set, validate_connection() raises this instead.
+    """
+    mock_client_instance = MagicMock(spec=TracClient)
+    if validate_side_effect is not None:
+        mock_client_instance.validate_connection.side_effect = (
+            validate_side_effect
+        )
+    else:
+        mock_client_instance.validate_connection.return_value = (
+            validate_return
+        )
+    return mock_client_instance
+
+
+# ---------------------------------------------------------------------------
+# 1. Help output & parser structure
+# ---------------------------------------------------------------------------
+
+
+def test_help_shows_all_five_trac_flags(capsys):
+    """--help output includes all five --trac-* / --check-trac flags."""
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "--trac-url" in out
+    assert "--trac-username" in out
+    assert "--trac-password" in out
+    assert "--trac-password-file" in out
+    assert "--check-trac" in out
+
+
+def test_help_does_not_show_from_wiki_or_to_wiki(capsys):
+    """REGRESSION GUARD: --from-wiki and --to-wiki must NOT appear in --help.
+
+    This test protects against accidentally shipping Phase 21/22 scaffolding
+    during Phase 20. Update (do not delete) this test when those phases land.
+    """
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    out = capsys.readouterr().out
+    assert "--from-wiki" not in out
+    assert "--to-wiki" not in out
+
+
+def test_exit_trac_constant_is_4():
+    """EXIT_TRAC must equal 4."""
+    assert EXIT_TRAC == 4
+
+
+# ---------------------------------------------------------------------------
+# 4-6. --check-trac happy path (mocked TracClient)
+# ---------------------------------------------------------------------------
+
+
+def test_check_trac_success_prints_url_user_sources_and_exits_ok(
+    monkeypatch, capsys
+):
+    """Happy path: prints URL/username/sources/OK and returns EXIT_OK."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(validate_return="1.2.0")
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda cfg: mock_instance,
+    )
+
+    result = main(["--check-trac"])
+
+    assert result == EXIT_OK
+    out = capsys.readouterr().out
+    assert "URL:" in out
+    assert _TEST_URL in out
+    assert "Username:" in out
+    assert _TEST_USER in out
+    assert "Sources:" in out
+    assert "environment variables" in out
+    assert "OK (Trac API version 1.2.0)" in out
+
+
+def test_check_trac_success_never_prints_password(monkeypatch, capsys):
+    """CRITICAL (Pitfall 3): the password must never appear in stdout or stderr."""
+    secret = "s3cret_XY!zz"
+    monkeypatch.setenv("TRAC_URL", _TEST_URL)
+    monkeypatch.setenv("TRAC_USERNAME", _TEST_USER)
+    monkeypatch.setenv("TRAC_PASSWORD", secret)
+    mock_instance = _mock_tracclient(validate_return="1.2.0")
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda cfg: mock_instance,
+    )
+
+    main(["--check-trac"])
+
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+
+
+def test_check_trac_shows_insecure_warning_when_config_insecure(
+    monkeypatch, capsys
+):
+    """When config.insecure is True, --check-trac prints 'verification DISABLED'."""
+    _mock_valid_env(monkeypatch)
+    monkeypatch.setenv("TRAC_INSECURE", "true")
+    mock_instance = _mock_tracclient(validate_return="1.2.0")
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda cfg: mock_instance,
+    )
+
+    result = main(["--check-trac"])
+
+    assert result == EXIT_OK
+    out = capsys.readouterr().out
+    assert "verification DISABLED" in out
+
+
+# ---------------------------------------------------------------------------
+# 7-10. --check-trac failure paths
+# ---------------------------------------------------------------------------
+
+
+def test_check_trac_auth_missing_prints_friendly_error_and_exits_4(
+    monkeypatch, tmp_path, capsys
+):
+    """No credentials: friendly two-line error to stderr, exit 4, no Traceback."""
+    for var in (
+        "TRAC_URL",
+        "TRAC_USERNAME",
+        "TRAC_PASSWORD",
+        "TRAC_MCP_CONFIG",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)  # avoid picking up a real YAML
+
+    # Suppress load_dotenv() so a real .env file in the repo root cannot
+    # re-inject credentials that monkeypatch.delenv() just removed.
+    monkeypatch.setattr(
+        "trac_mcp_server.config_bootstrap.load_dotenv",
+        lambda: None,
+    )
+
+    result = main(["--check-trac"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert err.startswith("trac-convert: no Trac credentials found.")
+    assert "TRAC_URL" in err
+    assert "TRAC_USERNAME" in err
+    assert "TRAC_PASSWORD" in err
+    assert ".trac_mcp/config.yaml" in err
+    assert "Traceback" not in err
+
+
+def test_check_trac_ping_auth_fault_classified(monkeypatch, capsys):
+    """XML-RPC auth fault is classified as 'authentication failed'."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        validate_side_effect=xmlrpc.client.Fault(403, "Forbidden")
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda cfg: mock_instance,
+    )
+
+    result = main(["--check-trac"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "authentication failed" in err
+    assert "Forbidden" in err
+
+
+def test_check_trac_ping_ssl_error_classified(monkeypatch, capsys):
+    """SSL error is classified and mentions 'SSL'."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        validate_side_effect=requests.exceptions.SSLError("bad cert")
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda cfg: mock_instance,
+    )
+
+    result = main(["--check-trac"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "SSL" in err
+
+
+def test_check_trac_ping_connection_error_classified(
+    monkeypatch, capsys
+):
+    """Connection error is classified and mentions 'cannot reach' and the URL."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        validate_side_effect=requests.exceptions.ConnectionError(
+            "refused"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda cfg: mock_instance,
+    )
+
+    result = main(["--check-trac"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "cannot reach" in err
+    assert _TEST_URL in err
+
+
+# ---------------------------------------------------------------------------
+# 11-12. Password-file precedence
+# ---------------------------------------------------------------------------
+
+
+def test_password_file_precedes_password_flag(
+    monkeypatch, tmp_path, capsys
+):
+    """--trac-password-file takes precedence over --trac-password."""
+    pw_file = tmp_path / "pw.txt"
+    pw_file.write_text("filepass\n", encoding="utf-8")
+
+    monkeypatch.setenv("TRAC_URL", _TEST_URL)
+    monkeypatch.setenv("TRAC_USERNAME", _TEST_USER)
+    # No TRAC_PASSWORD env - password comes from file or flag
+
+    captured_config = []
+
+    def mock_client_factory(cfg):
+        captured_config.append(cfg)
+        return _mock_tracclient(validate_return="1.2.0")
+
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        mock_client_factory,
+    )
+
+    result = main(
+        [
+            "--check-trac",
+            "--trac-password",
+            "flagpass",
+            "--trac-password-file",
+            str(pw_file),
+        ]
+    )
+
+    assert result == EXIT_OK
+    assert len(captured_config) == 1
+    assert captured_config[0].password == "filepass"
+
+
+def test_password_file_read_failure_exits_4(monkeypatch, capsys):
+    """Non-existent password file exits 4 with a diagnostic on stderr."""
+    _mock_valid_env(monkeypatch)
+
+    result = main(
+        ["--check-trac", "--trac-password-file", "/nonexistent/path"]
+    )
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "cannot read --trac-password-file" in err
+
+
+# ---------------------------------------------------------------------------
+# 13-14. Dispatch and regression guards
+# ---------------------------------------------------------------------------
+
+
+def test_check_trac_does_not_require_to_flag(monkeypatch, capsys):
+    """--check-trac works without --to (dispatch happens before --to check)."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(validate_return="1.2.0")
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda cfg: mock_instance,
+    )
+
+    result = main(["--check-trac"])  # no --to
+
+    assert result == EXIT_OK
+
+
+def test_normal_conversion_still_requires_to_flag(capsys):
+    """REGRESSION GUARD: normal conversion without --to exits EXIT_USAGE_ERROR."""
+    result = main(["--from", "md"])  # no --to, no --check-trac
+
+    assert result == EXIT_USAGE_ERROR
+    err = capsys.readouterr().err
+    assert "--to" in err
