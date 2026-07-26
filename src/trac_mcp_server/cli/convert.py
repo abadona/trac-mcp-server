@@ -99,7 +99,7 @@ def _fetch_wiki_page(page_name: str, args) -> tuple[str | None, int]:
         return None, EXIT_TRAC  # password-file diagnostic already written
 
     try:
-        config, _sources = bootstrap_config(overrides)
+        config, _ = bootstrap_config(overrides)
     except ValueError:
         sys.stderr.write(
             "trac-convert: no Trac credentials found.\n"
