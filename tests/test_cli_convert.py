@@ -1,4 +1,4 @@
-"""Smoke tests for the trac-convert CLI scaffold (Phase 11 + 12 + 13)."""
+"""Smoke tests for the trac-convert CLI scaffold (Phase 11 + 12 + 13 + 14)."""
 
 import argparse
 import io
@@ -230,3 +230,126 @@ def test_main_writes_warnings_to_stderr_not_stdout(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "warning: lossy: table dropped" in captured.err
     assert "warning:" not in captured.out
+
+
+# ---------- file I/O integration tests ----------
+
+
+def test_input_file_positional_defaults_to_none():
+    """Positional FILE is optional — defaults to None when omitted."""
+    assert build_parser().parse_args(["--to", "md"]).input_file is None
+
+
+def test_input_file_positional_accepts_a_path():
+    """Positional FILE captures the path string."""
+    assert (
+        build_parser()
+        .parse_args(["some/file.md", "--to", "md"])
+        .input_file
+        == "some/file.md"
+    )
+
+
+def test_output_flag_short_and_long_forms_equivalent():
+    """-o and --output set output_file to the same value."""
+    short = (
+        build_parser()
+        .parse_args(["--to", "md", "-o", "out.md"])
+        .output_file
+    )
+    long = (
+        build_parser()
+        .parse_args(["--to", "md", "--output", "out.md"])
+        .output_file
+    )
+    assert short == "out.md"
+    assert long == "out.md"
+
+
+def test_main_reads_from_positional_file_and_writes_to_stdout(
+    tmp_path, capsys
+):
+    """main() reads the positional FILE and prints conversion to stdout."""
+    in_file = tmp_path / "in.md"
+    in_file.write_text("# Hello", encoding="utf-8")
+    exit_code = main([str(in_file), "--from", "md", "--to", "tracwiki"])
+    assert exit_code == 0
+    assert "= Hello" in capsys.readouterr().out
+
+
+def test_main_file_input_takes_precedence_when_stdin_also_available(
+    monkeypatch, tmp_path, capsys
+):
+    """When both a positional FILE and stdin are present, FILE wins."""
+    in_file = tmp_path / "in.tracwiki"
+    in_file.write_text("= FromFile =", encoding="utf-8")
+    monkeypatch.setattr("sys.stdin", io.StringIO("# FromStdin"))
+    exit_code = main([str(in_file), "--to", "md"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("# FromFile")
+
+
+def test_main_missing_input_file_returns_1_with_stderr_message(
+    tmp_path, capsys
+):
+    """A non-existent positional FILE exits 1 with a clear stderr message."""
+    missing = tmp_path / "does_not_exist.md"
+    exit_code = main([str(missing), "--to", "md"])
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "trac-convert: cannot read input file" in err
+    assert str(missing) in err
+
+
+def test_main_writes_to_output_file_and_leaves_stdout_empty(
+    monkeypatch, tmp_path, capsys
+):
+    """main() writes to -o FILE and emits nothing to stdout."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
+    out = tmp_path / "out.tracwiki"
+    exit_code = main(
+        ["--from", "md", "--to", "tracwiki", "-o", str(out)]
+    )
+    assert exit_code == 0
+    assert out.exists()
+    assert "= Hello" in out.read_text(encoding="utf-8")
+    assert capsys.readouterr().out == ""
+
+
+def test_main_output_write_error_returns_1_with_stderr_message(
+    monkeypatch, tmp_path, capsys
+):
+    """An unwritable output path exits 1 with a clear stderr message."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
+    bad_out = str(tmp_path / "no_such_dir" / "out.md")
+    exit_code = main(["--from", "md", "--to", "md", "-o", bad_out])
+    assert exit_code == 1
+    assert (
+        "trac-convert: cannot write output file"
+        in capsys.readouterr().err
+    )
+
+
+def test_main_file_to_file_roundtrip(tmp_path, capsys):
+    """File-to-file pass-through produces a byte-identical copy on disk."""
+    content = "# Hello\n\nBody.\n"
+    in_file = tmp_path / "in.md"
+    in_file.write_text(content, encoding="utf-8")
+    out = tmp_path / "out.md"
+    exit_code = main(
+        [str(in_file), "--from", "md", "--to", "md", "-o", str(out)]
+    )
+    assert exit_code == 0
+    assert out.read_text(encoding="utf-8") == content
+    assert capsys.readouterr().out == ""
+
+
+def test_main_output_file_written_as_utf8(monkeypatch, tmp_path):
+    """Non-ASCII content roundtrips correctly through UTF-8 file write."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Café ☕"))
+    out = tmp_path / "out.md"
+    exit_code = main(["--from", "md", "--to", "md", "-o", str(out)])
+    assert exit_code == 0
+    raw = out.read_bytes()
+    assert raw.decode("utf-8") == "# Café ☕"
