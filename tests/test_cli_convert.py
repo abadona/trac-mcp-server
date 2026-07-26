@@ -1,4 +1,4 @@
-"""Smoke tests for trac-convert CLI (Phase 11 + 12 + 13 + 14 + 15 + 16 + 17)."""
+"""Smoke tests for trac-convert CLI (Phase 11–17)."""
 
 import argparse
 import io
@@ -698,3 +698,100 @@ def test_quiet_preserves_exit_code_ok(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.err == ""
     assert "converted output" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Phase 17: --verbose flag and verbose/quiet mutex
+# ---------------------------------------------------------------------------
+
+
+def test_verbose_flag_defaults_to_false():
+    """--verbose defaults to False when not provided."""
+    args = build_parser().parse_args(["--to", "md"])
+    assert args.verbose is False
+
+
+def test_verbose_flag_short_and_long_forms_equivalent():
+    """-v and --verbose both set args.verbose to True."""
+    short = build_parser().parse_args(["--to", "md", "-v"]).verbose
+    long = (
+        build_parser().parse_args(["--to", "md", "--verbose"]).verbose
+    )
+    assert short is True
+    assert long is True
+
+
+def test_verbose_emits_source_format_info_line(monkeypatch, capsys):
+    """--verbose: stderr contains 'info: source format: markdown'."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
+    exit_code = main(["--from", "md", "--to", "tracwiki", "--verbose"])
+    assert exit_code == EXIT_OK
+    err = capsys.readouterr().err
+    assert "info: source format: markdown" in err
+
+
+def test_verbose_emits_byte_count_info_lines(monkeypatch, capsys):
+    """--verbose: stderr contains 'info: read N bytes' and 'info: wrote M bytes'."""
+    input_text = "# Hello"
+    monkeypatch.setattr("sys.stdin", io.StringIO(input_text))
+    exit_code = main(["--from", "md", "--to", "tracwiki", "--verbose"])
+    assert exit_code == EXIT_OK
+    err = capsys.readouterr().err
+    assert "info: read " in err
+    assert "info: wrote " in err
+    # Verify numeric counts are present
+    import re
+
+    assert re.search(r"info: read \d+ bytes", err)
+    assert re.search(r"info: wrote \d+ bytes", err)
+
+
+def test_verbose_diagnostics_go_to_stderr_not_stdout(
+    monkeypatch, capsys
+):
+    """--verbose: 'info:' never appears on stdout."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
+    exit_code = main(["--from", "md", "--to", "tracwiki", "--verbose"])
+    assert exit_code == EXIT_OK
+    captured = capsys.readouterr()
+    assert "info:" not in captured.out
+
+
+def test_verbose_info_lines_precede_warning_lines(monkeypatch, capsys):
+    """--verbose: info: lines appear before warning: lines in stderr."""
+    fake_result = ConversionResult(
+        text="output",
+        source_format="markdown",
+        target_format="tracwiki",
+        converted=True,
+        warnings=["lossy: table dropped"],
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.convert_text",
+        Mock(return_value=fake_result),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("anything"))
+    exit_code = main(["--to", "tracwiki", "--verbose"])
+    assert exit_code == EXIT_OK
+    err = capsys.readouterr().err
+    info_pos = err.index("info: source format:")
+    warning_pos = err.index("warning: lossy:")
+    assert info_pos < warning_pos
+
+
+def test_quiet_and_verbose_mutually_exclusive_exits_2(capsys):
+    """--quiet and --verbose together → SystemExit code EXIT_USAGE_ERROR (2)."""
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--to", "md", "--quiet", "--verbose"])
+    assert excinfo.value.code == EXIT_USAGE_ERROR
+    err = capsys.readouterr().err
+    assert "not allowed with" in err
+
+
+def test_no_flags_emits_no_info_lines(monkeypatch, capsys):
+    """Default (no -v, no -q): stderr contains no info: lines."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
+    exit_code = main(["--from", "md", "--to", "tracwiki"])
+    assert exit_code == EXIT_OK
+    err = capsys.readouterr().err
+    assert "info:" not in err
