@@ -415,13 +415,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--from-file",
+        dest="from_file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Read input from a local file. "
+            "Alternative to the positional FILE argument. "
+            "Mutually exclusive with FILE and --from-clipboard."
+        ),
+    )
+    parser.add_argument(
         "--from-wiki",
         dest="from_wiki",
         default=None,
         metavar="PAGE",
         help=(
             "Fetch input from a Trac wiki page (source format is TracWiki). "
-            "Mutually exclusive with FILE and --from-clipboard."
+            "Mutually exclusive with FILE, --from-file, and --from-clipboard."
         ),
     )
     parser.add_argument(
@@ -573,6 +584,27 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("trac-convert: --to is required\n")
         return EXIT_USAGE_ERROR
 
+    # --- --from-file mutex validation ---
+    if args.from_file is not None:
+        if args.input_file is not None:
+            sys.stderr.write(
+                "trac-convert: --from-file and FILE are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
+        if args.from_clipboard:
+            sys.stderr.write(
+                "trac-convert: --from-file and --from-clipboard are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
+        if args.from_wiki is not None:
+            sys.stderr.write(
+                "trac-convert: --from-file and --from-wiki are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
+
     # --- --from-wiki mutex validation ---
     if args.from_wiki is not None:
         if args.input_file is not None:
@@ -610,6 +642,12 @@ def main(argv: list[str] | None = None) -> int:
             " mutually exclusive\n"
         )
         return EXIT_RUNTIME_ERROR
+    if args.from_clipboard and args.from_file is not None:
+        sys.stderr.write(
+            "trac-convert: --from-clipboard and --from-file are"
+            " mutually exclusive\n"
+        )
+        return EXIT_RUNTIME_ERROR
     if args.to_clipboard and args.output_file is not None:
         sys.stderr.write(
             "trac-convert: --to-clipboard and --output are"
@@ -625,6 +663,15 @@ def main(argv: list[str] | None = None) -> int:
         # --from-wiki authoritatively knows the source is TracWiki;
         # silently override --from (which may still be 'auto' or 'md').
         args.source_format = "tracwiki"
+    elif args.from_file is not None:
+        try:
+            text = Path(args.from_file).read_text(encoding="utf-8")
+        except OSError as e:
+            sys.stderr.write(
+                f"trac-convert: cannot read input file:"
+                f" {args.from_file}: {e.strerror or e}\n"
+            )
+            return EXIT_RUNTIME_ERROR
     elif args.from_clipboard:
         try:
             text = pyperclip.paste()

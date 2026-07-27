@@ -312,6 +312,64 @@ def test_main_missing_input_file_returns_1_with_stderr_message(
     assert str(missing) in err
 
 
+def test_from_file_flag_reads_file_and_writes_to_stdout(
+    tmp_path, capsys
+):
+    """--from-file PATH reads the file and converts to stdout."""
+    in_file = tmp_path / "in.md"
+    in_file.write_text("# Hello", encoding="utf-8")
+    exit_code = main(["--from-file", str(in_file), "--to", "tracwiki"])
+    assert exit_code == 0
+    assert "= Hello" in capsys.readouterr().out
+
+
+def test_from_file_flag_missing_file_returns_1(tmp_path, capsys):
+    """--from-file with a non-existent path exits 1 with a message."""
+    missing = tmp_path / "no_such.md"
+    exit_code = main(["--from-file", str(missing), "--to", "md"])
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "cannot read input file" in err
+    assert str(missing) in err
+
+
+def test_from_file_and_positional_file_are_mutually_exclusive(
+    tmp_path, capsys
+):
+    """--from-file and positional FILE together exit 1."""
+    f = tmp_path / "x.md"
+    f.write_text("hi", encoding="utf-8")
+    exit_code = main(["--from-file", str(f), str(f), "--to", "md"])
+    assert exit_code == 1
+    assert "--from-file" in capsys.readouterr().err
+
+
+def test_from_file_and_from_clipboard_are_mutually_exclusive(
+    tmp_path, capsys
+):
+    """--from-file and --from-clipboard together exit 1."""
+    f = tmp_path / "x.md"
+    f.write_text("hi", encoding="utf-8")
+    exit_code = main(
+        ["--from-file", str(f), "--from-clipboard", "--to", "md"]
+    )
+    assert exit_code == 1
+    assert "--from-clipboard" in capsys.readouterr().err
+
+
+def test_from_file_and_from_wiki_are_mutually_exclusive(
+    tmp_path, capsys
+):
+    """--from-file and --from-wiki together exit 1."""
+    f = tmp_path / "x.md"
+    f.write_text("hi", encoding="utf-8")
+    exit_code = main(
+        ["--from-file", str(f), "--from-wiki", "MyPage", "--to", "md"]
+    )
+    assert exit_code == 1
+    assert "--from-wiki" in capsys.readouterr().err
+
+
 def test_main_writes_to_output_file_and_leaves_stdout_empty(
     monkeypatch, tmp_path, capsys
 ):
