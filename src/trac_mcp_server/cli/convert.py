@@ -560,6 +560,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- --check-trac: early dispatch before conversion validation ---
     if args.check_trac:
+        if args.from_wiki is not None or args.to_wiki is not None:
+            sys.stderr.write(
+                "trac-convert: --check-trac cannot be combined with"
+                " --from-wiki or --to-wiki\n"
+            )
+            return EXIT_RUNTIME_ERROR
         return _check_trac(args)
 
     # --- --to is required for conversion (not for --check-trac or --to-wiki) ---

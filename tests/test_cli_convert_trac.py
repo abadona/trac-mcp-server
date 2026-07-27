@@ -369,6 +369,26 @@ def test_check_trac_does_not_require_to_flag(monkeypatch):
     assert result == EXIT_OK
 
 
+def test_check_trac_with_from_wiki_exits_error(capsys):
+    """--check-trac + --from-wiki is rejected with EXIT_RUNTIME_ERROR."""
+    result = main(["--check-trac", "--from-wiki", "WikiStart"])
+
+    assert result == EXIT_RUNTIME_ERROR
+    err = capsys.readouterr().err
+    assert "--check-trac" in err
+    assert "--from-wiki" in err
+
+
+def test_check_trac_with_to_wiki_exits_error(capsys):
+    """--check-trac + --to-wiki is rejected with EXIT_RUNTIME_ERROR."""
+    result = main(["--check-trac", "--to-wiki", "WikiStart"])
+
+    assert result == EXIT_RUNTIME_ERROR
+    err = capsys.readouterr().err
+    assert "--check-trac" in err
+    assert "--to-wiki" in err
+
+
 def test_normal_conversion_still_requires_to_flag(capsys):
     """REGRESSION GUARD: normal conversion without --to exits EXIT_USAGE_ERROR."""
     result = main(["--from", "md"])  # no --to, no --check-trac
