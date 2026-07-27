@@ -44,15 +44,16 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
     NAME = "tracwiki"
 
-    def __init__(self, heading_anchors: bool = True):
+    def __init__(self, heading_anchors: bool = False):
         """Initialize renderer with state tracking for table rendering.
 
         Args:
-            heading_anchors: When True (default), emit an explicit ``#slug``
-                anchor on each heading so Markdown-source cross-references
-                resolve after conversion.  When False, omit the anchor and
-                emit plain ``= Heading =`` syntax (controlled by the
-                ``--heading-anchors off`` CLI flag).
+            heading_anchors: When True, emit an explicit ``#slug`` anchor on
+                each heading so Markdown-source cross-references resolve after
+                conversion.  Default is False: plain ``= Heading =`` syntax,
+                because Trac auto-generates heading anchors and explicit slugs
+                like ``#4-non-goals`` cause ``#4`` to be misread as a ticket
+                reference.
         """
         super().__init__()
         self._heading_anchors = heading_anchors
@@ -458,17 +459,17 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
 
 def markdown_to_tracwiki(
-    markdown_text: str, *, heading_anchors: bool = True
+    markdown_text: str, *, heading_anchors: bool = False
 ) -> str:
     """
     Convert Markdown text to TracWiki format.
 
     Args:
         markdown_text: Markdown formatted text
-        heading_anchors: When True (default), each heading includes an
-            explicit ``#slug`` anchor for Markdown cross-reference
-            compatibility.  Pass ``False`` to emit plain headings without
-            anchors (mirrors ``--heading-anchors off`` on the CLI).
+        heading_anchors: When True, each heading includes an explicit
+            ``#slug`` anchor for Markdown cross-reference compatibility.
+            Default is False: Trac auto-generates anchors and explicit slugs
+            can be misread as ticket references (e.g. ``#4-non-goals`` → #4).
 
     Returns:
         TracWiki formatted text
@@ -490,7 +491,7 @@ def markdown_to_tracwiki(
 
 
 def convert_with_warnings(
-    markdown_text: str, *, heading_anchors: bool = True
+    markdown_text: str, *, heading_anchors: bool = False
 ) -> ConversionResult:
     """
     Convert Markdown to TracWiki and detect unsupported features.
@@ -498,8 +499,8 @@ def convert_with_warnings(
     Args:
         markdown_text: Markdown formatted text
         heading_anchors: Forwarded to :func:`markdown_to_tracwiki`.  When
-            True (default), headings include an explicit ``#slug`` anchor.
-            Pass ``False`` for plain headings (``--heading-anchors off``).
+            True, headings include an explicit ``#slug`` anchor for
+            Markdown cross-reference compatibility.  Default is False.
 
     Returns:
         ConversionResult with TracWiki text and any warnings
