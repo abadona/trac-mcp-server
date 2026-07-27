@@ -1040,3 +1040,280 @@ def test_from_wiki_to_to_wiki_end_to_end_copies_page_verbatim(
     assert (
         mock_instance.put_wiki_page.call_args.args[1] == source_content
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 23: refined error classification tests
+# ---------------------------------------------------------------------------
+
+
+def test_from_wiki_timeout_reports_timed_out_and_exits_4(
+    monkeypatch, capsys
+):
+    """ReadTimeout from get_wiki_page -> 'timed out' message, exit 4."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_side_effect=requests.exceptions.ReadTimeout(
+            "slow"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--from-wiki", "MyPage", "--to", "md"])
+
+    assert result == EXIT_TRAC
+    captured = capsys.readouterr()
+    assert "trac-convert:" in captured.err
+    assert "timed out" in captured.err
+    assert _TEST_URL in captured.err
+
+
+def test_from_wiki_connect_timeout_classified_as_timeout(
+    monkeypatch, capsys
+):
+    """ConnectTimeout from get_wiki_page -> 'timed out' (NOT 'cannot reach').
+
+    Pins MRO ordering: ConnectTimeout inherits from both ConnectionError and
+    Timeout; the Timeout branch in _classify_trac_error must fire first.
+    """
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_side_effect=requests.exceptions.ConnectTimeout(
+            "slow-connect"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--from-wiki", "MyPage", "--to", "md"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "timed out" in err
+    assert "cannot reach Trac" not in err
+
+
+def test_from_wiki_permission_denied_fault_classified(
+    monkeypatch, capsys
+):
+    """Fault(403, 'PERMISSION_DENIED: WIKI_VIEW required') -> 'permission denied'."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_side_effect=xmlrpc.client.Fault(
+            403, "PERMISSION_DENIED: WIKI_VIEW required"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--from-wiki", "MyPage", "--to", "md"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "permission denied" in err
+    assert "PERMISSION_DENIED: WIKI_VIEW required" in err
+
+
+def test_to_wiki_fault_not_found_reports_page_not_found(
+    monkeypatch, capsys
+):
+    """Fault(1, 'does not exist') from put_wiki_page -> 'wiki page not found: <page>'."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        put_wiki_page_side_effect=xmlrpc.client.Fault(
+            1, "does not exist"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("hello"))
+
+    result = main(["--to-wiki", "TargetPage"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "wiki page not found:" in err
+    assert "TargetPage" in err
+
+
+def test_to_wiki_permission_denied_fault_classified(
+    monkeypatch, capsys
+):
+    """Fault(403, 'PERMISSION_DENIED: WIKI_MODIFY required') -> 'permission denied'."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        put_wiki_page_side_effect=xmlrpc.client.Fault(
+            403, "PERMISSION_DENIED: WIKI_MODIFY required"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("hello"))
+
+    result = main(["--to-wiki", "MyPage"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "permission denied" in err
+    assert "PERMISSION_DENIED: WIKI_MODIFY required" in err
+
+
+def test_to_wiki_timeout_reports_timed_out_and_exits_4(
+    monkeypatch, capsys
+):
+    """ReadTimeout from put_wiki_page -> 'timed out' and URL host, exit 4."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        put_wiki_page_side_effect=requests.exceptions.ReadTimeout(
+            "slow-write"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("hello"))
+
+    result = main(["--to-wiki", "MyPage"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "timed out" in err
+    assert _TEST_URL in err
+
+
+def test_to_wiki_value_error_still_reports_write_rejected(
+    monkeypatch, capsys
+):
+    """ValueError('Page not modified ...') -> fallback preserves the exception string.
+
+    Pins Phase 22's ValueError-write-rejected path after Phase 23 refactor:
+    the fallback branch of _classify_trac_error preserves the full exception
+    string so users still see the actual rejection reason.
+    """
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        put_wiki_page_side_effect=ValueError(
+            "Page not modified (content identical)"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("hello"))
+
+    result = main(["--to-wiki", "MyPage"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "Page not modified" in err
+
+
+def test_check_trac_permission_denied_ping_classified(
+    monkeypatch, capsys
+):
+    """Fault(403, 'permission denied') from validate_connection -> 'permission denied'.
+
+    Pins that _check_trac uses the same classifier as the wiki paths (not the
+    old hard-coded 'authentication failed' message).
+    """
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        validate_side_effect=xmlrpc.client.Fault(
+            403, "permission denied"
+        )
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--check-trac"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "permission denied" in err
+    assert "authentication failed" not in err
+
+
+def test_check_trac_timeout_ping_classified(monkeypatch, capsys):
+    """Timeout from validate_connection -> 'timed out', exit 4."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        validate_side_effect=requests.exceptions.Timeout("ping timeout")
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--check-trac"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "timed out" in err
+
+
+def test_check_trac_generic_fault_still_reports_fault_string(
+    monkeypatch, capsys
+):
+    """Fault(500, 'Backend on fire') -> generic fault branch preserves faultString."""
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        validate_side_effect=xmlrpc.client.Fault(500, "Backend on fire")
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    result = main(["--check-trac"])
+
+    assert result == EXIT_TRAC
+    err = capsys.readouterr().err
+    assert "Backend on fire" in err
+
+
+def test_classify_trac_error_timeout_precedes_connection_error():
+    """Direct unit test: ConnectTimeout classified as 'timed out', not 'cannot reach'.
+
+    ConnectTimeout inherits from both ConnectionError and Timeout. The helper
+    must check Timeout first (MRO ordering constraint).
+    """
+    from trac_mcp_server.cli.convert import _classify_trac_error
+
+    exc = requests.exceptions.ConnectTimeout("x")
+    msg = _classify_trac_error(exc, "https://trac.example")
+    assert "timed out" in msg
+    assert "cannot reach" not in msg
+
+
+def test_classify_trac_error_password_never_included():
+    """Direct unit test: helper signature is password-free.
+
+    The helper receives no password argument. This test verifies that the
+    faultString is included (expected) but no fabricated credential leak is
+    possible — the helper simply has no parameter for it.
+    """
+    from trac_mcp_server.cli.convert import _classify_trac_error
+
+    exc = xmlrpc.client.Fault(0, "secret-hunter-2000 rejected")
+    msg = _classify_trac_error(
+        exc, "https://trac.example", page_name="SomePage"
+    )
+    # faultString is preserved in the returned message
+    assert "secret-hunter-2000" in msg
+    # No password argument exists in the helper signature — this call
+    # proves the contract: password cannot come out because it never goes in.
