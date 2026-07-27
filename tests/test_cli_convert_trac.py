@@ -1,8 +1,14 @@
-"""Tests for Phase 20 CLI additions: --trac-* flags, --check-trac diagnostic,
-EXIT_TRAC, and regression guards against premature --from-wiki/--to-wiki
-scaffolding."""
+"""Tests for Phase 20-24 CLI Trac wiring:
+- Phase 20: --trac-* flags, --check-trac diagnostic, EXIT_TRAC.
+- Phase 21: --from-wiki fetch path + mutex validation.
+- Phase 22: --to-wiki write path + --wiki-comment + mutex validation.
+- Phase 23: refined error classification via _classify_trac_error().
+- Phase 24: full integration coverage (mocked round-trip conversion +
+  env-var-gated live integration test).
+"""
 
 import io
+import sys
 import xmlrpc.client
 from unittest.mock import MagicMock
 
@@ -1388,3 +1394,113 @@ def test_from_wiki_convert_edit_to_wiki_end_to_end_exercises_conversion(
     assert marker.strip() in put_args[1]
     # Default comment is the Phase 22 constant.
     assert put_args[2] == "Updated via trac-convert"
+
+
+# ---------------------------------------------------------------------------
+# Phase 24: live integration test (gated by --run-live)
+#
+# Requires:
+#   - `pytest --run-live` on the command line
+#   - TRAC_URL, TRAC_USERNAME, TRAC_PASSWORD env vars pointing at a
+#     real Trac instance
+#   - Optional: TRAC_TEST_WIKI_PAGE env var (default:
+#     "TracConvertLiveTest") — the test writes to this page, so pick
+#     a scratch page the test user has WIKI_MODIFY on
+#   - Optional: TRAC_INSECURE=1 to disable SSL verification for
+#     self-signed test servers
+#
+# Mirrors the convention used by
+# tests/test_mcp/tools/test_wiki_attachment.py:578-644.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live
+def test_live_round_trip_check_from_edit_to(tmp_path, capsys):
+    """Live round-trip: --check-trac → --from-wiki → edit → --to-wiki.
+
+    Requires --run-live and TRAC_URL/USERNAME/PASSWORD env vars
+    pointing at a real Trac instance. Uses TRAC_TEST_WIKI_PAGE
+    (default 'TracConvertLiveTest') as the scratch target so
+    WikiStart and production pages are never modified.
+
+    Sequence:
+      1. --check-trac → exit 0, stdout mentions "OK (Trac API version".
+      2. --from-wiki <page> --to md → exit 0, MD content captured.
+      3. Append a timestamped marker to the MD (proves edit fidelity).
+      4. --to-wiki <page> --from md with edited MD on stdin →
+         exit 0, verbose stderr line mentions the page name.
+      5. --from-wiki <page> --to md (re-read) → exit 0, MD contains
+         the marker written in step 4 (proves the round-trip actually
+         persisted).
+
+    Does NOT delete the wiki page or reset its state — Trac accumulates
+    versions, which matches test_wiki_attachment.py's convention (only
+    attachments are cleaned; pages persist). Ops can prune manually.
+
+    IMPORTANT: The test does NOT unset the real env vars. It reads
+    them via os.environ.get and relies on the actual live Trac.
+    """
+    import os
+    import time
+
+    if not (
+        os.environ.get("TRAC_URL")
+        and os.environ.get("TRAC_USERNAME")
+        and os.environ.get("TRAC_PASSWORD")
+    ):
+        pytest.skip(
+            "TRAC_URL / TRAC_USERNAME / TRAC_PASSWORD must be set"
+            " for --run-live tests"
+        )
+
+    page_name = os.environ.get(
+        "TRAC_TEST_WIKI_PAGE", "TracConvertLiveTest"
+    )
+
+    # Step 1: --check-trac
+    rc = main(["--check-trac"])
+    assert rc == EXIT_OK, "live --check-trac should succeed"
+    captured = capsys.readouterr()
+    assert "OK (Trac API version" in captured.out
+
+    # Step 2: --from-wiki → md on stdout
+    rc = main(["--from-wiki", page_name, "--to", "md"])
+    assert rc == EXIT_OK, (
+        f"live --from-wiki {page_name} should succeed"
+        f" (does the page exist?)"
+    )
+    md_original = capsys.readouterr().out
+    assert md_original, (
+        "live --from-wiki should return non-empty content"
+    )
+
+    # Step 3: local edit — append a timestamped marker.
+    marker = f"\n\nLive round-trip marker {time.time():.6f}\n"
+    md_edited = md_original + marker
+
+    # Step 4: --to-wiki with edited MD on stdin, verbose to check
+    #   "info: wrote" line surfaces on stderr.
+    monkeypatch_stdin_via_replace = md_edited
+    import io as _io
+
+    original_stdin = sys.stdin
+    sys.stdin = _io.StringIO(monkeypatch_stdin_via_replace)
+    try:
+        rc = main(["--to-wiki", page_name, "--from", "md", "-v"])
+    finally:
+        sys.stdin = original_stdin
+    assert rc == EXIT_OK, (
+        f"live --to-wiki {page_name} should succeed"
+        f" (does the test user have WIKI_MODIFY?)"
+    )
+    captured = capsys.readouterr()
+    assert "info: wrote" in captured.err
+    assert page_name in captured.err
+
+    # Step 5: re-fetch and verify the marker landed.
+    rc = main(["--from-wiki", page_name, "--to", "md"])
+    assert rc == EXIT_OK
+    md_reread = capsys.readouterr().out
+    assert marker.strip() in md_reread, (
+        "marker written in step 4 must appear in the re-read page"
+    )
