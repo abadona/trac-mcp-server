@@ -1317,3 +1317,74 @@ def test_classify_trac_error_password_never_included():
     assert "secret-hunter-2000" in msg
     # No password argument exists in the helper signature — this call
     # proves the contract: password cannot come out because it never goes in.
+
+
+# ---------------------------------------------------------------------------
+# Phase 24: full integration test coverage
+# ---------------------------------------------------------------------------
+
+
+def test_from_wiki_convert_edit_to_wiki_end_to_end_exercises_conversion(
+    monkeypatch, capsys
+):
+    """Trac→MD→edit→Trac round-trip: fetch tracwiki, convert to MD,
+    edit the MD text, convert back to tracwiki, put it — with a
+    mocked TracClient. Pins the goal wording of Phase 24
+    ('Trac→MD→edit→Trac roundtrip') by exercising the CONVERTER
+    on both legs (not just the passthrough case Phase 22 covered).
+
+    Strategy: run two main() calls sharing the same mocked TracClient.
+      1. main(["--from-wiki", "SourcePage", "--to", "md"]) →
+         captured stdout is TracWiki-of-SourcePage converted to MD.
+      2. Locally 'edit' by appending a marker line.
+      3. main(["--to-wiki", "DestPage", "--from", "md"]) with the
+         edited MD on stdin → mocked put_wiki_page receives
+         TracWiki-of-edited-MD.
+
+    Assertions verify:
+    - Leg 1 exit 0, stdout starts with "# " (proves tracwiki→md ran).
+    - Leg 2 exit 0.
+    - put_wiki_page was called with the DEST page name.
+    - The content argument to put_wiki_page:
+        * starts with "= " (proves md→tracwiki ran — not the raw MD).
+        * contains the marker line from the edit step (proves the
+          edited text, not the original, was written).
+    - The comment argument is the default "Updated via trac-convert".
+    """
+    source_tracwiki = "= Source Heading =\n\nOriginal body.\n"
+    marker = "Edited line added by test\n"
+
+    _mock_valid_env(monkeypatch)
+    mock_instance = _mock_tracclient(
+        get_wiki_page_return=source_tracwiki,
+        put_wiki_page_return=_PUT_OK,
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.TracClient",
+        lambda _: mock_instance,
+    )
+
+    # Leg 1: fetch + convert tracwiki → md, capture on stdout.
+    result1 = main(["--from-wiki", "SourcePage", "--to", "md"])
+    assert result1 == EXIT_OK
+    md_from_leg1 = capsys.readouterr().out
+    # tracwiki_to_markdown turns "= X =" into "# X"
+    assert md_from_leg1.lstrip().startswith("# ")
+    assert "Source Heading" in md_from_leg1
+
+    # Edit: append a marker line to the MD.
+    edited_md = md_from_leg1 + marker
+
+    # Leg 2: convert md → tracwiki + put via --to-wiki, edited MD on stdin.
+    monkeypatch.setattr("sys.stdin", io.StringIO(edited_md))
+    result2 = main(["--to-wiki", "DestPage", "--from", "md"])
+    assert result2 == EXIT_OK
+
+    put_args = mock_instance.put_wiki_page.call_args.args
+    assert put_args[0] == "DestPage"
+    # convert_with_warnings turns "# X" into "= X ="
+    assert put_args[1].startswith("= ")
+    # The edited marker survives the md → tracwiki conversion.
+    assert marker.strip() in put_args[1]
+    # Default comment is the Phase 22 constant.
+    assert put_args[2] == "Updated via trac-convert"
