@@ -50,7 +50,7 @@ The `trac-mcp-server` command is registered as an entry point in `pyproject.toml
 
 ## trac-convert
 
-The `trac-convert` command is a standalone binary that converts between TracWiki and Markdown formats. Unlike `trac-mcp-server`, it is designed for interactive shell use and Unix pipe composition — no Trac connection required.
+The `trac-convert` command is a standalone binary that converts between TracWiki and Markdown formats. It is designed for interactive shell use and Unix pipe composition. Most operations work without a Trac connection; `--from-wiki`, `--to-wiki`, and `--check-trac` connect to a live Trac instance using the same credentials and config precedence as `trac-mcp-server`.
 
 ### Usage
 
@@ -59,6 +59,9 @@ trac-convert --from md --to tracwiki < input.md > output.tw     # stdin → stdo
 trac-convert --to tracwiki input.md -o output.tw                 # file → file
 trac-convert --from-clipboard --to md                            # clipboard → stdout
 trac-convert --to-clipboard input.md                             # file → clipboard
+trac-convert --check-trac                                        # verify Trac connectivity
+trac-convert --from-wiki MyPage --to md -o my-page.md           # Trac → local file
+trac-convert my-page.md --to-wiki MyPage                        # local file → Trac
 trac-convert --version
 ```
 
