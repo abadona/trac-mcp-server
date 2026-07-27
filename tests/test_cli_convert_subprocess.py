@@ -9,6 +9,7 @@ In-process main(argv) tests in test_cli_convert.py cover behavior; these
 tests cover WIRING. Do not duplicate behavioral coverage here.
 """
 
+import os
 import subprocess
 import sys
 
@@ -176,3 +177,102 @@ def test_subprocess_non_ascii_stdin_stdout_pipe() -> None:
     )
     assert result.returncode == 0
     assert "Café" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Phase 24: Trac-flag wiring smoke tests
+#
+# These tests exercise the argparse dispatch and exit-code propagation
+# for the three Trac-facing flags added in Phases 20-22
+# (--check-trac, --from-wiki, --to-wiki). Because subprocess tests
+# cannot monkeypatch TracClient, they must ONLY use code paths that
+# fail BEFORE any Trac wire call is attempted — i.e., missing
+# credentials (bootstrap_config raises ValueError) and mutex
+# violations. Behavioral coverage of the wire-error paths lives in
+# tests/test_cli_convert_trac.py.
+# ---------------------------------------------------------------------------
+
+
+def _run_cli_no_trac_env(
+    *args: str,
+    input_text: str | None = None,
+    cwd: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Invoke the CLI subprocess with all TRAC_* env vars scrubbed.
+
+    Prevents a real .env in the repo root from injecting live Trac
+    credentials that would attempt real network calls during
+    subprocess CI runs. Required for the wiring-only tests that must
+    exit before any wire call.
+    """
+    env = os.environ.copy()
+    for var in (
+        "TRAC_URL",
+        "TRAC_USERNAME",
+        "TRAC_PASSWORD",
+        "TRAC_INSECURE",
+        "TRAC_MCP_CONFIG",
+    ):
+        env.pop(var, None)
+    # Disable dotenv's .env file loading so that the project-root .env
+    # cannot inject real credentials even when load_dotenv() searches upward
+    # from the installed module's __file__ location (which is in src/
+    # and finds the project's .env regardless of cwd).
+    env["PYTHON_DOTENV_DISABLED"] = "1"
+    return subprocess.run(
+        [sys.executable, "-m", CLI_MODULE, *args],
+        input=input_text,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+        cwd=cwd,
+    )
+
+
+def test_subprocess_check_trac_help_shows_all_five_trac_flags() -> None:
+    result = _run_cli("--help")
+    assert result.returncode == 0
+    assert "--check-trac" in result.stdout
+    assert "--trac-url" in result.stdout
+    assert "--trac-username" in result.stdout
+    assert "--trac-password" in result.stdout
+    assert "--trac-password-file" in result.stdout
+    assert "--from-wiki" in result.stdout
+    assert "--to-wiki" in result.stdout
+
+
+def test_subprocess_check_trac_no_env_exits_4_friendly_error(
+    tmp_path,
+) -> None:
+    result = _run_cli_no_trac_env("--check-trac", cwd=str(tmp_path))
+    assert result.returncode == 4
+    assert "no Trac credentials found" in result.stderr
+    assert "TRAC_URL" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert result.stdout == ""
+
+
+def test_subprocess_from_wiki_no_env_exits_4(tmp_path) -> None:
+    result = _run_cli_no_trac_env(
+        "--from-wiki", "AnyPage", "--to", "md", cwd=str(tmp_path)
+    )
+    assert result.returncode == 4
+    assert "no Trac credentials found" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert result.stdout == ""
+
+
+def test_subprocess_to_wiki_and_output_mutex_exits_1(tmp_path) -> None:
+    result = _run_cli_no_trac_env(
+        "--to-wiki",
+        "AnyPage",
+        "-o",
+        str(tmp_path / "out.md"),
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 1
+    assert (
+        "--to-wiki and --output are mutually exclusive" in result.stderr
+    )
+    assert result.stdout == ""
