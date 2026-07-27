@@ -231,7 +231,8 @@ def test_check_trac_auth_missing_prints_friendly_error_and_exits_4(
 
 
 def test_check_trac_ping_auth_fault_classified(monkeypatch, capsys):
-    """XML-RPC auth fault is classified as 'authentication failed'."""
+    """XML-RPC generic fault is classified as 'Trac fault' (Phase 23: refactored
+    from 'authentication failed' to the shared helper's generic Fault branch)."""
     _mock_valid_env(monkeypatch)
     mock_instance = _mock_tracclient(
         validate_side_effect=xmlrpc.client.Fault(403, "Forbidden")
@@ -245,7 +246,7 @@ def test_check_trac_ping_auth_fault_classified(monkeypatch, capsys):
 
     assert result == EXIT_TRAC
     err = capsys.readouterr().err
-    assert "authentication failed" in err
+    assert "Trac fault" in err
     assert "Forbidden" in err
 
 
@@ -530,7 +531,9 @@ def test_from_wiki_page_not_found_prints_friendly_error_and_exits_4(
 def test_from_wiki_other_fault_reports_fault_string_and_exits_4(
     monkeypatch, capsys
 ):
-    """Fault(403) -> 'Trac fault' message with the faultString."""
+    """Fault(403, 'permission denied') -> 'permission denied' message (Phase 23:
+    faultString contains 'denied', so the permission-denied branch fires instead
+    of the generic 'Trac fault' branch)."""
     _mock_valid_env(monkeypatch)
     mock_instance = _mock_tracclient(
         get_wiki_page_side_effect=xmlrpc.client.Fault(
@@ -546,7 +549,6 @@ def test_from_wiki_other_fault_reports_fault_string_and_exits_4(
 
     assert result == EXIT_TRAC
     err = capsys.readouterr().err
-    assert "Trac fault" in err
     assert "permission denied" in err
     assert "wiki page not found" not in err
 
@@ -833,7 +835,9 @@ def test_to_wiki_auth_missing_prints_friendly_error_and_exits_4(
 def test_to_wiki_permission_denied_fault_reports_and_exits_4(
     monkeypatch, capsys
 ):
-    """Fault(403) from put_wiki_page -> 'Trac fault' message, exit 4."""
+    """Fault(403, 'PERMISSION_DENIED') from put_wiki_page -> 'permission denied'
+    message, exit 4. (Phase 23: faultString contains 'DENIED', so permission-
+    denied branch fires instead of the old generic 'Trac fault' branch.)"""
     _mock_valid_env(monkeypatch)
     mock_instance = _mock_tracclient(
         put_wiki_page_side_effect=xmlrpc.client.Fault(
@@ -850,14 +854,16 @@ def test_to_wiki_permission_denied_fault_reports_and_exits_4(
 
     assert result == EXIT_TRAC
     err = capsys.readouterr().err
-    assert "Trac fault" in err
+    assert "permission denied" in err
     assert "PERMISSION_DENIED" in err
 
 
 def test_to_wiki_not_modified_value_error_reports_and_exits_4(
     monkeypatch, capsys
 ):
-    """ValueError('Page not modified') -> 'wiki write rejected', exit 4."""
+    """ValueError('Page not modified') -> 'wiki write failed' with reason, exit 4.
+    (Phase 23: ValueError goes through helper fallback which uses 'wiki write
+    failed' prefix instead of the old 'wiki write rejected' prefix.)"""
     _mock_valid_env(monkeypatch)
     mock_instance = _mock_tracclient(
         put_wiki_page_side_effect=ValueError(
@@ -874,14 +880,16 @@ def test_to_wiki_not_modified_value_error_reports_and_exits_4(
 
     assert result == EXIT_TRAC
     err = capsys.readouterr().err
-    assert "wiki write rejected" in err
+    assert "wiki write" in err
     assert "Page not modified" in err
 
 
 def test_to_wiki_invalid_page_name_value_error_reports_and_exits_4(
     monkeypatch, capsys
 ):
-    """ValueError('Invalid page name') -> 'wiki write rejected', exit 4."""
+    """ValueError('Invalid page name') -> 'wiki write failed' with reason, exit 4.
+    (Phase 23: ValueError goes through helper fallback which uses 'wiki write
+    failed' prefix instead of the old 'wiki write rejected' prefix.)"""
     _mock_valid_env(monkeypatch)
     mock_instance = _mock_tracclient(
         put_wiki_page_side_effect=ValueError(
@@ -898,7 +906,7 @@ def test_to_wiki_invalid_page_name_value_error_reports_and_exits_4(
 
     assert result == EXIT_TRAC
     err = capsys.readouterr().err
-    assert "wiki write rejected" in err
+    assert "wiki write" in err
     assert "Invalid page name" in err
 
 

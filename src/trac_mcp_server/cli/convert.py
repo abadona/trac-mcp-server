@@ -7,6 +7,9 @@ verbosity flags (--quiet, --verbose) on top of this skeleton.
 # Phase 20 adds Trac wiring: --trac-* flags, --check-trac, EXIT_TRAC.
 # Phase 21 adds --from-wiki: fetch TracWiki pages via TracClient.
 # Phase 22 adds --to-wiki + --wiki-comment: write TracWiki pages via TracClient.
+# Phase 23 extracts a shared error-classification helper (Timeout +
+#   permission-denied sub-classification) used uniformly by all three
+#   Trac-facing functions.
 """
 
 import argparse
@@ -82,6 +85,73 @@ def _build_trac_overrides(args) -> dict:
     return overrides
 
 
+def _classify_trac_error(
+    exc: BaseException,
+    url: str,
+    page_name: str | None = None,
+    action: str = "wiki operation",
+) -> str:
+    """Return a human-readable stderr message for a Trac-facing error.
+
+    Sub-classification precedence:
+      1. xmlrpc.client.Fault:
+         - faultCode == 1 OR "not found"/"does not exist" in faultString
+           -> "wiki page not found: <page_name>" (falls back to
+              "resource not found (fault 1): <faultString>" when
+              page_name is None)
+         - "permission"/"denied" in faultString (case-insensitive)
+           -> "Trac permission denied (<action>): <faultString>"
+         - default -> "Trac fault (<action>): <faultString>"
+      2. requests.exceptions.SSLError -> "SSL error: <exc>"
+      3. requests.exceptions.Timeout  -> "Trac request timed out (host: <url>): <exc>"
+         MUST be tested before ConnectionError because ConnectTimeout
+         is a subclass of ConnectionError. See MRO:
+         ConnectTimeout(ConnectionError, Timeout).
+      4. requests.exceptions.ConnectionError -> "cannot reach Trac at <url>: <exc>"
+      5. fallback -> "<action> failed: <exc>"
+
+    Every returned message must be prefixed with "trac-convert: " by
+    the caller (not by this helper) so the caller controls the
+    subcommand-neutral prefix.
+
+    The helper signature is password-free by design; no credential is
+    ever passed in or could appear in the returned string.
+    """
+    import xmlrpc.client
+
+    import requests.exceptions
+
+    if isinstance(exc, xmlrpc.client.Fault):
+        fault_str = exc.faultString
+        fault_str_lower = fault_str.lower()
+        if getattr(exc, "faultCode", None) == 1 or (
+            "not found" in fault_str_lower
+            or "does not exist" in fault_str_lower
+        ):
+            if page_name is not None:
+                return f"wiki page not found: {page_name}"
+            return f"resource not found (fault 1): {fault_str}"
+        if (
+            "permission" in fault_str_lower
+            or "denied" in fault_str_lower
+        ):
+            return f"Trac permission denied ({action}): {fault_str}"
+        return f"Trac fault ({action}): {fault_str}"
+
+    if isinstance(exc, requests.exceptions.SSLError):
+        return f"SSL error: {exc}"
+
+    # Timeout MUST precede ConnectionError: ConnectTimeout inherits from both
+    # requests.exceptions.ConnectionError and requests.exceptions.Timeout.
+    if isinstance(exc, requests.exceptions.Timeout):
+        return f"Trac request timed out (host: {url}): {exc}"
+
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return f"cannot reach Trac at {url}: {exc}"
+
+    return f"{action} failed: {str(exc) or type(exc).__name__}"
+
+
 def _fetch_wiki_page(page_name: str, args) -> tuple[str | None, int]:
     """Fetch a TracWiki page's raw source via TracClient.
 
@@ -92,10 +162,6 @@ def _fetch_wiki_page(page_name: str, args) -> tuple[str | None, int]:
     Returns (text, EXIT_OK) on success or (None, EXIT_TRAC) on any
     failure. Never prints the password.
     """
-    import xmlrpc.client
-
-    import requests.exceptions
-
     overrides = _build_trac_overrides(args)
     if overrides is None:
         return (
@@ -116,29 +182,11 @@ def _fetch_wiki_page(page_name: str, args) -> tuple[str | None, int]:
     client = TracClient(config)
     try:
         text = client.get_wiki_page(page_name)
-    except xmlrpc.client.Fault as e:
-        # faultCode == 1 is Trac's "not found" convention; other faults
-        # are auth / permission / protocol errors.
-        if getattr(e, "faultCode", None) == 1:
-            sys.stderr.write(
-                f"trac-convert: wiki page not found: {page_name}\n"
-            )
-        else:
-            sys.stderr.write(
-                f"trac-convert: Trac fault fetching"
-                f" {page_name}: {e.faultString}\n"
-            )
-        return None, EXIT_TRAC
-    except requests.exceptions.SSLError as e:
-        sys.stderr.write(f"trac-convert: SSL error: {e}\n")
-        return None, EXIT_TRAC
-    except requests.exceptions.ConnectionError as e:
-        sys.stderr.write(
-            f"trac-convert: cannot reach Trac at {config.trac_url}: {e}\n"
-        )
-        return None, EXIT_TRAC
     except Exception as e:
-        sys.stderr.write(f"trac-convert: wiki fetch failed: {e}\n")
+        msg = _classify_trac_error(
+            e, config.trac_url, page_name=page_name, action="wiki fetch"
+        )
+        sys.stderr.write(f"trac-convert: {msg}\n")
         return None, EXIT_TRAC
 
     return text, EXIT_OK
@@ -163,11 +211,11 @@ def _put_wiki_page(
     failure. info is the dict returned by put_wiki_page:
     {name, version, author, lastModified, url}. Never prints the
     password.
+
+    All wire errors (Fault, Timeout, SSL, ConnectionError, ValueError
+    for write rejections) are routed through the shared error helper
+    whose fallback branch preserves the exception string verbatim.
     """
-    import xmlrpc.client
-
-    import requests.exceptions
-
     overrides = _build_trac_overrides(args)
     if overrides is None:
         return (
@@ -188,30 +236,11 @@ def _put_wiki_page(
     client = TracClient(config)
     try:
         info = client.put_wiki_page(page_name, content, comment)
-    except ValueError as e:
-        # put_wiki_page raises ValueError for: invalid page name,
-        # invalid content, "Page not modified (content identical)",
-        # and version conflicts. Conversion succeeded — the Trac
-        # write was rejected, so map to EXIT_TRAC (not
-        # EXIT_CONVERSION_ERROR).
-        sys.stderr.write(f"trac-convert: wiki write rejected: {e}\n")
-        return None, EXIT_TRAC
-    except xmlrpc.client.Fault as e:
-        sys.stderr.write(
-            f"trac-convert: Trac fault writing"
-            f" {page_name}: {e.faultString}\n"
-        )
-        return None, EXIT_TRAC
-    except requests.exceptions.SSLError as e:
-        sys.stderr.write(f"trac-convert: SSL error: {e}\n")
-        return None, EXIT_TRAC
-    except requests.exceptions.ConnectionError as e:
-        sys.stderr.write(
-            f"trac-convert: cannot reach Trac at {config.trac_url}: {e}\n"
-        )
-        return None, EXIT_TRAC
     except Exception as e:
-        sys.stderr.write(f"trac-convert: wiki write failed: {e}\n")
+        msg = _classify_trac_error(
+            e, config.trac_url, page_name=page_name, action="wiki write"
+        )
+        sys.stderr.write(f"trac-convert: {msg}\n")
         return None, EXIT_TRAC
 
     return info, EXIT_OK
@@ -225,11 +254,12 @@ def _check_trac(args) -> int:
 
     Returns EXIT_OK (0) on successful ping, EXIT_TRAC (4) on any failure.
     Password is NEVER written to stdout or stderr.
+
+    All wire errors are routed through the shared error helper with
+    page_name=None and action="Trac ping". The permission-denied branch
+    fires for PERMISSION_DENIED-style faultStrings; the generic fault
+    branch fires for other auth/protocol errors (e.g. Forbidden).
     """
-    import xmlrpc.client
-
-    import requests.exceptions
-
     overrides = _build_trac_overrides(args)
     if overrides is None:
         # Password-file read failure already reported to stderr
@@ -254,24 +284,11 @@ def _check_trac(args) -> int:
     client = TracClient(config)
     try:
         version = client.validate_connection()
-    except xmlrpc.client.Fault as e:
-        sys.stderr.write(
-            f"trac-convert: authentication failed: {e.faultString}\n"
-        )
-        return EXIT_TRAC
-    except requests.exceptions.SSLError as e:
-        sys.stderr.write(
-            f"trac-convert: SSL error (consider --trac-* with insecure"
-            f" config or fix cert): {e}\n"
-        )
-        return EXIT_TRAC
-    except requests.exceptions.ConnectionError as e:
-        sys.stderr.write(
-            f"trac-convert: cannot reach Trac at {config.trac_url}: {e}\n"
-        )
-        return EXIT_TRAC
     except Exception as e:
-        sys.stderr.write(f"trac-convert: Trac ping failed: {e}\n")
+        msg = _classify_trac_error(
+            e, config.trac_url, page_name=None, action="Trac ping"
+        )
+        sys.stderr.write(f"trac-convert: {msg}\n")
         return EXIT_TRAC
 
     sys.stdout.write(f"OK (Trac API version {version})\n")
@@ -523,8 +540,10 @@ def main(argv: list[str] | None = None) -> int:
       exception; a ``trac-convert: conversion failed: <reason>`` message
       is written to stderr (no traceback).
     - 4 (EXIT_TRAC): Trac connectivity, auth, or protocol error from
-      --check-trac, --from-wiki, or --to-wiki (including wiki write
-      rejections like "Page not modified" or "Version conflict").
+      --check-trac, --from-wiki, or --to-wiki. Sub-classified into:
+      wiki-page-not-found, permission-denied, timeout, SSL error,
+      network unreachable, or generic Trac fault. Password is never
+      written to stdout or stderr.
 
     Note on direction-scoped flags: --heading-anchors only affects the
     md→tracwiki direction and is silently ignored for tracwiki→md (and
