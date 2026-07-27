@@ -97,6 +97,28 @@ trac-convert --from-clipboard --to tracwiki --to-clipboard
 
 Supports stdin/stdout pipes, file I/O, and system clipboard on Linux, macOS, and Windows (via `pyperclip`). See [CLI Reference](docs/reference/cli.md#trac-convert) for the full flag list.
 
+### Trac Wiki I/O
+
+`trac-convert` can also read from and write to a live Trac instance via `--from-wiki PAGE` and `--to-wiki PAGE`, reusing the same credentials and config precedence as `trac-mcp-server`: `.trac_mcp/config.yml`, `TRAC_*` env vars, or `--trac-*` CLI flags — CLI wins.
+
+```bash
+# Verify Trac connectivity (prints resolved config, pings server)
+trac-convert --check-trac
+
+# Fetch a Trac wiki page, convert to Markdown, save locally
+trac-convert --from-wiki DesignDoc --to md -o design.md
+
+# Edit design.md in your favourite editor, then push it back
+trac-convert design.md --to-wiki DesignDoc --wiki-comment "Refined via CLI"
+
+# One-liner Trac → clipboard for quick reference lookup
+trac-convert --from-wiki ReleaseNotes --to md --to-clipboard
+```
+
+Auth setup: use an existing `.trac_mcp/config.yml` (the same file `trac-mcp-server` uses) or supply ad-hoc flags — `--trac-url`, `--trac-username`, `--trac-password-file ~/.trac_pass` (prefer `--trac-password-file` to keep secrets out of shell history). See [Configuration](docs/reference/configuration.md) for the full precedence rules.
+
+Trac errors (auth, network, page-not-found, permission-denied) exit with code `4` and write a human-readable message to stderr. See [CLI Reference](docs/reference/cli.md#trac-wiki-io) for the full flag list.
+
 ## Available Tools (42)
 
 ### Tickets (11)
