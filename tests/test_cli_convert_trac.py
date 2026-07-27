@@ -664,7 +664,7 @@ def test_from_wiki_output_to_clipboard_writes_converted_text(
 
     clipboard_calls = []
     monkeypatch.setattr(
-        "trac_mcp_server.cli.convert.pyperclip.copy",
+        "trac_mcp_server.cli.convert.write_clipboard",
         lambda text: clipboard_calls.append(text),
     )
 

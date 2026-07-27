@@ -74,8 +74,8 @@ trac-convert --version
 | `FILE` (positional) | stdin | Input file path; omit or use `-` for stdin |
 | `--from-file PATH` | -- | Read input from a local file (explicit named alternative to the positional `FILE`). Mutually exclusive with `FILE`, `--from-clipboard`, and `--from-wiki`. |
 | `-o, --output FILE` | stdout | Output file path; omit for stdout |
-| `--from-clipboard` | -- | Read input from system clipboard instead of stdin/file (requires pyperclip) |
-| `--to-clipboard` | -- | Write output to system clipboard instead of stdout/file |
+| `--from-clipboard` | -- | Read input from system clipboard instead of stdin/file. On Linux, requires one of `wl-clipboard`, `xclip`, or `xsel` to be installed (tried in that order, based on `$WAYLAND_DISPLAY` / `$DISPLAY`); falls back to `pyperclip`. On headless terminals without a clipboard tool, use `--from-file PATH` or pipe input on stdin instead. |
+| `--to-clipboard` | -- | Write output to system clipboard instead of stdout/file. Same Linux tool requirement as `--from-clipboard`. |
 | `--heading-anchors {on,off}` | `on` | md→tracwiki only: emit explicit `#slug` anchors on TracWiki headings (silently ignored in tw→md direction) |
 | `--unknown-macros {bracket,preserve,drop}` | `bracket` | tw→md only: how to render unknown TracWiki macros — `bracket` = `[MACRO: Name]`, `preserve` = leave `[[Name]]` literal, `drop` = omit (silently ignored in md→tw direction) |
 | `-v, --verbose` | -- | Emit `info:` diagnostics to stderr (mutually exclusive with `-q`) |
