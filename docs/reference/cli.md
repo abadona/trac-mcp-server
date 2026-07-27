@@ -72,6 +72,7 @@ trac-convert --version
 | `--from {md,tracwiki,auto}` | `auto` | Source format; `auto` sniffs the input via heuristics |
 | `--to {md,tracwiki}` | *(required unless --check-trac or --to-wiki)* | Destination format |
 | `FILE` (positional) | stdin | Input file path; omit or use `-` for stdin |
+| `--from-file PATH` | -- | Read input from a local file (explicit named alternative to the positional `FILE`). Mutually exclusive with `FILE`, `--from-clipboard`, and `--from-wiki`. |
 | `-o, --output FILE` | stdout | Output file path; omit for stdout |
 | `--from-clipboard` | -- | Read input from system clipboard instead of stdin/file (requires pyperclip) |
 | `--to-clipboard` | -- | Write output to system clipboard instead of stdout/file |
@@ -115,12 +116,12 @@ trac-convert --check-trac
 trac-convert --from-wiki MyPage --to md -o my-page.md
 
 # Push a Markdown file back to Trac
-trac-convert notes.md --to-wiki MyPage --wiki-comment "Edited via CLI"
+trac-convert --from-file notes.md --to-wiki MyPage --wiki-comment "Edited via CLI"
 
 # Round-trip: fetch, edit locally, then push back
 trac-convert --from-wiki MyPage --to md -o my-page.md
 # (edit my-page.md)
-trac-convert my-page.md --to-wiki MyPage
+trac-convert --from-file my-page.md --to-wiki MyPage
 ```
 
 On failure, `trac-convert` exits with code `4` and writes a classified error message (page-not-found, permission-denied, timeout, SSL, connection, generic) to stderr. See [Configuration](configuration.md) for the full auth and config precedence rules.

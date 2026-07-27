@@ -109,7 +109,7 @@ trac-convert --check-trac
 trac-convert --from-wiki DesignDoc --to md -o design.md
 
 # Edit design.md in your favourite editor, then push it back
-trac-convert design.md --to-wiki DesignDoc --wiki-comment "Refined via CLI"
+trac-convert --from-file design.md --to-wiki DesignDoc --wiki-comment "Refined via CLI"
 
 # One-liner Trac → clipboard for quick reference lookup
 trac-convert --from-wiki ReleaseNotes --to md --to-clipboard
