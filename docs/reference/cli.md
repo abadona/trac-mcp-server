@@ -61,7 +61,7 @@ trac-convert --from-clipboard --to md                            # clipboard →
 trac-convert --to-clipboard input.md                             # file → clipboard
 trac-convert --check-trac                                        # verify Trac connectivity
 trac-convert --from-wiki MyPage --to md -o my-page.md           # Trac → local file
-trac-convert my-page.md --to-wiki MyPage                        # local file → Trac
+trac-convert --from-file my-page.md --to-wiki MyPage            # local file → Trac
 trac-convert --version
 ```
 
