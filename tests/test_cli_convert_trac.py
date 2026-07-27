@@ -1415,7 +1415,7 @@ def test_from_wiki_convert_edit_to_wiki_end_to_end_exercises_conversion(
 
 
 @pytest.mark.live
-def test_live_round_trip_check_from_edit_to(tmp_path, capsys):
+def test_live_round_trip_check_from_edit_to(capsys):
     """Live round-trip: --check-trac → --from-wiki → edit → --to-wiki.
 
     Requires --run-live and TRAC_URL/USERNAME/PASSWORD env vars
