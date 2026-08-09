@@ -21,30 +21,24 @@ class TestTracWikiConverter(unittest.TestCase):
     """Test Markdown to TracWiki conversion."""
 
     def test_heading_level_1(self):
-        """Test H1 heading conversion.
-
-        Headings emit an explicit Markdown-style anchor so that
-        ``[text](#heading-1)`` cross-references in the source resolve
-        after conversion (Trac's auto-generated id strips spaces but
-        does NOT lowercase).
-        """
+        """Test H1 heading conversion. Trac auto-generates anchors; no explicit slug emitted."""
         result = markdown_to_tracwiki("# Heading 1")
-        self.assertEqual(result, "= Heading 1 = #heading-1")
+        self.assertEqual(result, "= Heading 1 =")
 
     def test_heading_level_2(self):
         """Test H2 heading conversion."""
         result = markdown_to_tracwiki("## Heading 2")
-        self.assertEqual(result, "== Heading 2 == #heading-2")
+        self.assertEqual(result, "== Heading 2 ==")
 
     def test_heading_level_3(self):
         """Test H3 heading conversion."""
         result = markdown_to_tracwiki("### Heading 3")
-        self.assertEqual(result, "=== Heading 3 === #heading-3")
+        self.assertEqual(result, "=== Heading 3 ===")
 
     def test_heading_level_4(self):
         """Test H4 heading conversion."""
         result = markdown_to_tracwiki("#### Heading 4")
-        self.assertEqual(result, "==== Heading 4 ==== #heading-4")
+        self.assertEqual(result, "==== Heading 4 ====")
 
     def test_bold_text(self):
         """Test bold text conversion."""
@@ -215,6 +209,101 @@ plain code
             "[wiki:HomePage Home]",
         )
 
+    def test_traclink_url_emitted_verbatim(self):
+        """`wiki:`-prefixed link targets convert to working TracWiki links.
+
+        Regression test for ticket #17: ``[Hardware](wiki:BnodeHardware)``
+        -- exactly what ``tracwiki_to_markdown`` emits for a native
+        ``[wiki:BnodeHardware Hardware]`` link -- was left as literal
+        Markdown by the ``":" in url and "/" not in url`` guard, and the
+        multi-segment form ``wiki:b-node/blog`` was double-prefixed into
+        ``[wiki:wiki:b-node/blog Blog]``. Both must now emit the target
+        verbatim.
+        """
+        self.assertEqual(
+            markdown_to_tracwiki("[Hardware](wiki:BnodeHardware)"),
+            "[wiki:BnodeHardware Hardware]",
+        )
+        self.assertEqual(
+            markdown_to_tracwiki("[Blog](wiki:b-node/blog)"),
+            "[wiki:b-node/blog Blog]",
+        )
+
+    def test_traclink_other_resolvers(self):
+        """Non-wiki TracLink resolvers survive too, single- and multi-segment.
+
+        Ticket #17: the same guard corrupted every TracLink resolver, not
+        just ``wiki:`` -- single-segment targets (``ticket:42``) fell
+        through as literal Markdown, multi-segment ones
+        (``source:trunk/foo.py``) got a spurious ``wiki:`` prefix.
+        """
+        for url, text, expected in [
+            ("ticket:42", "Bug", "[ticket:42 Bug]"),
+            ("milestone:1.0", "M", "[milestone:1.0 M]"),
+            ("htdocs:style.css", "css", "[htdocs:style.css css]"),
+            ("attachment:file.txt", "att", "[attachment:file.txt att]"),
+            (
+                "raw-attachment:f.txt",
+                "raw",
+                "[raw-attachment:f.txt raw]",
+            ),
+            (
+                "source:trunk/foo.py",
+                "file",
+                "[source:trunk/foo.py file]",
+            ),
+            ("changeset:abc123", "rev", "[changeset:abc123 rev]"),
+        ]:
+            with self.subTest(url=url):
+                self.assertEqual(
+                    markdown_to_tracwiki(f"[{text}]({url})"), expected
+                )
+
+    def test_traclink_round_trips_through_both_converters(self):
+        """wiki_get -> wiki_update round-trip leaves existing links intact.
+
+        The end-to-end shape of ticket #17: pull TracWiki through
+        ``tracwiki_to_markdown``, push the untouched result back through
+        ``markdown_to_tracwiki``, and the link must come out identical.
+        """
+        for tracwiki in [
+            "[wiki:BnodeHardware Hardware]",
+            "[wiki:b-node/blog Blog]",
+            "[ticket:42 Bug]",
+            "[source:trunk/foo.py file]",
+            "[milestone:1.0 M]",
+            "[http://example.com ext]",
+            "[#anchor jump]",
+        ]:
+            with self.subTest(tracwiki=tracwiki):
+                markdown = tracwiki_to_markdown(tracwiki).text
+                self.assertEqual(
+                    markdown_to_tracwiki(markdown).strip(), tracwiki
+                )
+
+    def test_traclink_autolink_form(self):
+        """`<wiki:Page>` autolinks emit `[wiki:Page]`, not a doubled target."""
+        self.assertEqual(
+            markdown_to_tracwiki("<wiki:SomePage>"), "[wiki:SomePage]"
+        )
+
+    def test_unknown_scheme_with_slash_left_literal(self):
+        """Unknown `scheme:` targets stay literal even when they contain "/".
+
+        Ticket #17 removed the ``"/" not in url`` half of the sentinel
+        guard: a wiki page name never contains ":", so anything with a
+        colon that is not a known TracLink resolver is a sentinel, slash
+        or no slash. Previously ``foo:bar/baz`` became the broken
+        ``[wiki:foo:bar/baz label]``.
+        """
+        self.assertEqual(
+            markdown_to_tracwiki("[label](foo:bar/baz)"),
+            "[label](foo:bar/baz)",
+        )
+        self.assertNotIn(
+            "wiki:", markdown_to_tracwiki("[label](foo:bar/baz)")
+        )
+
     def test_image_conversion(self):
         """Test image conversion."""
         result = markdown_to_tracwiki("![alt text](image.png)")
@@ -329,9 +418,7 @@ Second paragraph."""
         """Test conversion without warnings."""
         result = convert_with_warnings("# Simple heading")
         self.assertIsInstance(result, ConversionResult)
-        self.assertEqual(
-            result.tracwiki, "= Simple heading = #simple-heading"
-        )
+        self.assertEqual(result.tracwiki, "= Simple heading =")
         self.assertEqual(len(result.warnings), 0)
 
     def test_convert_with_warnings_table_converted(self):
@@ -608,6 +695,86 @@ See screenshot: [[Image(error.png)]]"""
         """Test longer horizontal rule converts."""
         result = tracwiki_to_markdown("--------")
         self.assertEqual(result.text, "---")
+
+
+class TestUnknownMacrosOption(unittest.TestCase):
+    """Tests for the unknown_macros kwarg added in Phase 16.
+
+    Verifies that the default "bracket" preserves existing behavior and that
+    "preserve" / "drop" produce the expected output without disturbing known
+    macros (Image, BR) or the lossy-elements warning.
+    """
+
+    def test_default_bracket(self):
+        """unknown_macros="bracket" (default) emits [MACRO: Name]."""
+        result = tracwiki_to_markdown("[[PageOutline]]")
+        self.assertIn("[MACRO: PageOutline]", result.text)
+
+    def test_bracket_explicit(self):
+        """Explicit unknown_macros="bracket" matches the default."""
+        default = tracwiki_to_markdown("[[PageOutline]]")
+        explicit = tracwiki_to_markdown(
+            "[[PageOutline]]", unknown_macros="bracket"
+        )
+        self.assertEqual(default.text, explicit.text)
+
+    def test_preserve_keeps_literal(self):
+        """unknown_macros="preserve" leaves [[MacroName]] verbatim."""
+        result = tracwiki_to_markdown(
+            "[[PageOutline]]", unknown_macros="preserve"
+        )
+        self.assertIn("[[PageOutline]]", result.text)
+        self.assertNotIn("[MACRO:", result.text)
+
+    def test_drop_removes_macro(self):
+        """unknown_macros="drop" silently omits the macro."""
+        result = tracwiki_to_markdown(
+            "before [[PageOutline]] after", unknown_macros="drop"
+        )
+        self.assertNotIn("PageOutline", result.text)
+        self.assertIn("before", result.text)
+        self.assertIn("after", result.text)
+
+    def test_known_macros_unaffected_bracket(self):
+        """Image macro is converted to Markdown img regardless of mode."""
+        result = tracwiki_to_markdown(
+            "[[Image(foo.png)]]", unknown_macros="bracket"
+        )
+        self.assertIn("![](foo.png)", result.text)
+
+    def test_known_macros_unaffected_preserve(self):
+        """Image macro converts correctly under preserve mode too."""
+        result = tracwiki_to_markdown(
+            "[[Image(foo.png)]]", unknown_macros="preserve"
+        )
+        self.assertIn("![](foo.png)", result.text)
+
+    def test_known_macros_unaffected_drop(self):
+        """Image macro converts correctly under drop mode too."""
+        result = tracwiki_to_markdown(
+            "[[Image(foo.png)]]", unknown_macros="drop"
+        )
+        self.assertIn("![](foo.png)", result.text)
+
+    def test_macro_with_args_preserve(self):
+        """[[TOC(depth=2)]] under preserve stays literal."""
+        result = tracwiki_to_markdown(
+            "[[TOC(depth=2)]]", unknown_macros="preserve"
+        )
+        self.assertIn("[[TOC(depth=2)]]", result.text)
+
+    def test_warning_fires_under_all_modes(self):
+        """_detect_lossy_elements warning fires regardless of rendering mode."""
+        for mode in ("bracket", "preserve", "drop"):
+            with self.subTest(mode=mode):
+                result = tracwiki_to_markdown(
+                    "[[PageOutline]]",
+                    unknown_macros=mode,  # type: ignore[arg-type]
+                )
+                self.assertTrue(
+                    any("Unknown macros" in w for w in result.warnings),
+                    f"Expected 'Unknown macros' warning in mode={mode!r}",
+                )
 
 
 class TestTracWikiEnhancements(unittest.TestCase):
@@ -1416,16 +1583,18 @@ class TestHeadingExplicitAnchor(unittest.TestCase):
     """
 
     def test_simple_heading_emits_lowercase_slug(self):
-        """Single-word heading emits a lowercase slug anchor."""
+        """Single-word heading emits a lowercase slug anchor (heading_anchors=True)."""
         self.assertEqual(
-            markdown_to_tracwiki("## Surfaces"),
+            markdown_to_tracwiki("## Surfaces", heading_anchors=True),
             "== Surfaces == #surfaces",
         )
 
     def test_multi_word_heading_uses_dash_separator(self):
-        """Whitespace runs collapse to a single dash."""
+        """Whitespace runs collapse to a single dash (heading_anchors=True)."""
         self.assertEqual(
-            markdown_to_tracwiki("## Wiki task index page schema"),
+            markdown_to_tracwiki(
+                "## Wiki task index page schema", heading_anchors=True
+            ),
             "== Wiki task index page schema == #wiki-task-index-page-schema",
         )
 
@@ -1435,7 +1604,8 @@ class TestHeadingExplicitAnchor(unittest.TestCase):
         """
         self.assertEqual(
             markdown_to_tracwiki(
-                "## EvalRef marker fields (`ticket-comment`)"
+                "## EvalRef marker fields (`ticket-comment`)",
+                heading_anchors=True,
             ),
             "== EvalRef marker fields (`ticket-comment`) == "
             "#evalref-marker-fields-ticket-comment",
@@ -1448,7 +1618,8 @@ class TestHeadingExplicitAnchor(unittest.TestCase):
         ``### Example 1 — Initial round, judge picks one model``.
         """
         result = markdown_to_tracwiki(
-            "### Example 1 — Initial round, judge picks one model"
+            "### Example 1 — Initial round, judge picks one model",
+            heading_anchors=True,
         )
         # Em-dash + comma drop; whitespace runs (incl. the gap left by the
         # dropped em-dash) collapse to single dashes.
@@ -1458,29 +1629,33 @@ class TestHeadingExplicitAnchor(unittest.TestCase):
         )
 
     def test_heading_preserves_underscore_in_slug(self):
-        """Underscores in identifiers are part of the slug."""
+        """Underscores in identifiers are part of the slug (heading_anchors=True)."""
         self.assertEqual(
-            markdown_to_tracwiki("## cheapest_adequate field"),
+            markdown_to_tracwiki(
+                "## cheapest_adequate field", heading_anchors=True
+            ),
             "== cheapest_adequate field == #cheapest_adequate-field",
         )
 
     def test_heading_with_inline_bold_strips_markers_from_slug(self):
-        """``## **bold** heading`` slug drops the bold markers."""
+        """``## **bold** heading`` slug drops the bold markers (heading_anchors=True)."""
         self.assertEqual(
-            markdown_to_tracwiki("## **bold** heading"),
+            markdown_to_tracwiki(
+                "## **bold** heading", heading_anchors=True
+            ),
             "== '''bold''' heading == #bold-heading",
         )
 
     def test_anchor_link_resolves_to_emitted_heading_slug(self):
         """End-to-end: a Markdown anchor link's slug matches the slug
-        the converter emits for the corresponding heading.
+        the converter emits for the corresponding heading (heading_anchors=True).
         """
         source = (
             "## Field reference\n"
             "\n"
             "See [Field reference](#field-reference) above.\n"
         )
-        result = markdown_to_tracwiki(source)
+        result = markdown_to_tracwiki(source, heading_anchors=True)
         self.assertIn("== Field reference == #field-reference", result)
         self.assertIn("[#field-reference Field reference]", result)
 
@@ -1493,7 +1668,9 @@ class TestHeadingExplicitAnchor(unittest.TestCase):
         )
 
         markdown_source = "## Wiki task index page schema"
-        tracwiki_form = markdown_to_tracwiki(markdown_source)
+        tracwiki_form = markdown_to_tracwiki(
+            markdown_source, heading_anchors=True
+        )
         self.assertEqual(
             tracwiki_form,
             "== Wiki task index page schema == #wiki-task-index-page-schema",
@@ -1509,6 +1686,64 @@ class TestHeadingExplicitAnchor(unittest.TestCase):
         # heading rule; use punctuation that survives parsing.
         result = markdown_to_tracwiki("## ...")
         self.assertNotIn("#", result.replace("== ... ==", ""))
+
+
+class TestHeadingAnchorsOption(unittest.TestCase):
+    """Tests for the heading_anchors kwarg added in Phase 16.
+
+    Verifies that the default True preserves existing anchor behavior
+    and that False omits slugs without touching any other output.
+    """
+
+    def test_default_omits_anchor(self):
+        """Default (heading_anchors=False) emits plain heading without #slug."""
+        result = markdown_to_tracwiki("# Hello")
+        self.assertEqual(result, "= Hello =")
+
+    def test_off_omits_anchor(self):
+        """heading_anchors=False emits plain heading with no slug suffix."""
+        result = markdown_to_tracwiki("# Hello", heading_anchors=False)
+        self.assertEqual(result, "= Hello =")
+
+    def test_off_omits_anchor_h2(self):
+        """heading_anchors=False works for H2."""
+        result = markdown_to_tracwiki(
+            "## Section", heading_anchors=False
+        )
+        self.assertEqual(result, "== Section ==")
+
+    def test_off_omits_anchor_h3(self):
+        """heading_anchors=False works for H3."""
+        result = markdown_to_tracwiki("### Sub", heading_anchors=False)
+        self.assertEqual(result, "=== Sub ===")
+
+    def test_off_omits_anchor_multi_level(self):
+        """heading_anchors=False applies to all heading levels in one doc."""
+        source = "# Top\n\n## Middle\n\n### Bottom\n"
+        result = markdown_to_tracwiki(source, heading_anchors=False)
+        self.assertIn("= Top =", result)
+        self.assertIn("== Middle ==", result)
+        self.assertIn("=== Bottom ===", result)
+        self.assertNotIn("#top", result)
+        self.assertNotIn("#middle", result)
+        self.assertNotIn("#bottom", result)
+
+    def test_convert_with_warnings_forwards_option(self):
+        """convert_with_warnings forwards heading_anchors=False correctly."""
+        from trac_mcp_server.converters.markdown_to_tracwiki import (
+            convert_with_warnings,
+        )
+
+        result = convert_with_warnings("# X", heading_anchors=False)
+        self.assertEqual(result.text, "= X =")
+
+    def test_off_matches_default(self):
+        """Explicit heading_anchors=False produces identical output to the default."""
+        default = markdown_to_tracwiki("## Overview")
+        explicit = markdown_to_tracwiki(
+            "## Overview", heading_anchors=False
+        )
+        self.assertEqual(default, explicit)
 
 
 class TestDetectFormatHeuristicFenceAware(unittest.TestCase):

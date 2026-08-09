@@ -16,6 +16,40 @@ from .common import ConversionResult, markdown_to_tracwiki_lang
 _SLUG_DROP_RE = re.compile(r"[^\w\- ]+")
 _SLUG_WS_RE = re.compile(r"\s+")
 
+# TracLink resolvers that Trac understands natively as the target of
+# `[target text]`.  Deliberately an explicit allowlist rather than
+# "anything scheme-shaped": non-URL sentinels such as ``auto-pm:`` or
+# ``foo:bar`` must stay literal (ticket #8), while real TracLinks that
+# `tracwiki_to_markdown` emits as ``[text](wiki:Page)`` must survive a
+# push back through this converter unchanged (ticket #17).
+_TRACLINK_SCHEMES = frozenset(
+    {
+        "attachment",
+        "browser",
+        "changeset",
+        "comment",
+        "diff",
+        "export",
+        "htdocs",
+        "log",
+        "milestone",
+        "query",
+        "raw-attachment",
+        "report",
+        "repos",
+        "search",
+        "source",
+        "ticket",
+        "timeline",
+        "wiki",
+    }
+)
+# scheme:target — target must be non-empty, so a bare ``auto-pm:``
+# sentinel never matches even if its scheme were listed above.
+_TRACLINK_RE = re.compile(
+    r"(?P<scheme>[A-Za-z][\w+.-]*):(?P<target>\S.*)\Z"
+)
+
 
 def _heading_slug(rendered_text: str) -> str:
     """Return the GitHub-style anchor slug for a rendered heading text.
@@ -44,9 +78,19 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
     NAME = "tracwiki"
 
-    def __init__(self):
-        """Initialize renderer with state tracking for table rendering."""
+    def __init__(self, heading_anchors: bool = False):
+        """Initialize renderer with state tracking for table rendering.
+
+        Args:
+            heading_anchors: When True, emit an explicit ``#slug`` anchor on
+                each heading so Markdown-source cross-references resolve after
+                conversion.  Default is False: plain ``= Heading =`` syntax,
+                because Trac auto-generates heading anchors and explicit slugs
+                like ``#4-non-goals`` cause ``#4`` to be misread as a ticket
+                reference.
+        """
         super().__init__()
+        self._heading_anchors = heading_anchors
         # Track column alignments for current table
         self._table_alignments: list[str | None] = []
 
@@ -94,8 +138,16 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
         If the heading text slugifies to empty (e.g. punctuation-only),
         the explicit anchor is omitted and Trac's default id applies.
+
+        When ``self._heading_anchors`` is False (set via ``--heading-anchors
+        off`` on the CLI), the slug computation is skipped entirely and plain
+        ``= Heading =`` syntax is emitted — useful when the caller does not
+        need Markdown cross-reference compatibility.
         """
         marker = "=" * level
+        # --heading-anchors off: skip slug computation, emit plain heading.
+        if not self._heading_anchors:
+            return f"{marker} {text} {marker}\n"
         slug = _heading_slug(text)
         if slug:
             return f"{marker} {text} {marker} #{slug}\n"
@@ -172,6 +224,7 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
         Markdown: [text](url)
         TracWiki: [url text] for external URLs
+                  [url text] for already-resolved TracLinks (wiki:, ticket:, ...)
                   [wiki:page text] for internal wiki pages
 
         Refuses non-URL-shaped "links" (e.g., sentinels like ``auto-pm:``)
@@ -187,14 +240,31 @@ class TracWikiRenderer(mistune.BaseRenderer):
         if url.startswith("#"):
             return f"[{url} {text}]"
 
+        # Already-resolved TracLinks (`wiki:Page`, `ticket:42`,
+        # `source:trunk/f.py`, ...) are valid TracWiki targets as they
+        # stand — emit them verbatim. This is what `tracwiki_to_markdown`
+        # produces, so a wiki_get -> wiki_update round-trip that leaves
+        # existing links untouched no longer corrupts them (ticket #17).
+        traclink = _TRACLINK_RE.match(url)
+        if (
+            traclink
+            and traclink.group("scheme").lower() in _TRACLINK_SCHEMES
+        ):
+            # `<wiki:Page>` autolinks arrive with text == url; `[target]`
+            # is the tidier equivalent of `[target target]`.
+            if text == url:
+                return f"[{url}]"
+            return f"[{url} {text}]"
+
         # Refuse non-URL-shaped "links". A real URL or wiki link either
         # starts with a known scheme (handled above), is an anchor
-        # (handled above), or is a wiki-page-shaped path. The conservative
-        # rule: the url portion must contain "/" OR not contain ":" at all.
-        # A bare trailing-colon sentinel like "auto-pm:" fails both checks
-        # and must NOT be wrapped as a wiki link — emit the original
-        # Markdown link syntax verbatim so the text is preserved downstream.
-        if ":" in url and "/" not in url:
+        # (handled above), or is a wiki-page-shaped path. Wiki page names
+        # never contain ":" — Trac reserves it for the resolvers listed in
+        # _TRACLINK_SCHEMES — so any ":" still present here means the url
+        # is a sentinel like "auto-pm:" or "foo:bar", not a page path.
+        # Emit the original Markdown link syntax verbatim so the text is
+        # preserved downstream rather than wrapped as a broken wiki link.
+        if ":" in url:
             return f"[{text}]({url})"
 
         # Internal wiki links - add wiki: prefix
@@ -440,18 +510,24 @@ class TracWikiRenderer(mistune.BaseRenderer):
                     return func(text)
 
 
-def markdown_to_tracwiki(markdown_text: str) -> str:
+def markdown_to_tracwiki(
+    markdown_text: str, *, heading_anchors: bool = False
+) -> str:
     """
     Convert Markdown text to TracWiki format.
 
     Args:
         markdown_text: Markdown formatted text
+        heading_anchors: When True, each heading includes an explicit
+            ``#slug`` anchor for Markdown cross-reference compatibility.
+            Default is False: Trac auto-generates anchors and explicit slugs
+            can be misread as ticket references (e.g. ``#4-non-goals`` → #4).
 
     Returns:
         TracWiki formatted text
     """
     # Create renderer and parser with table plugin enabled
-    renderer = TracWikiRenderer()
+    renderer = TracWikiRenderer(heading_anchors=heading_anchors)
     markdown = mistune.create_markdown(
         renderer=renderer, plugins=["table"]
     )
@@ -466,12 +542,17 @@ def markdown_to_tracwiki(markdown_text: str) -> str:
     return result
 
 
-def convert_with_warnings(markdown_text: str) -> ConversionResult:
+def convert_with_warnings(
+    markdown_text: str, *, heading_anchors: bool = False
+) -> ConversionResult:
     """
     Convert Markdown to TracWiki and detect unsupported features.
 
     Args:
         markdown_text: Markdown formatted text
+        heading_anchors: Forwarded to :func:`markdown_to_tracwiki`.  When
+            True, headings include an explicit ``#slug`` anchor for
+            Markdown cross-reference compatibility.  Default is False.
 
     Returns:
         ConversionResult with TracWiki text and any warnings
@@ -493,7 +574,9 @@ def convert_with_warnings(markdown_text: str) -> ConversionResult:
         )
 
     # Convert the markdown
-    tracwiki = markdown_to_tracwiki(markdown_text)
+    tracwiki = markdown_to_tracwiki(
+        markdown_text, heading_anchors=heading_anchors
+    )
 
     return ConversionResult(
         text=tracwiki,

@@ -109,9 +109,14 @@ TracWiki:  [https://example.com Link Text]
 
 Markdown:  [Wiki Link](WikiPage)
 TracWiki:  [wiki:WikiPage Wiki Link]
+
+Markdown:  [Wiki Link](wiki:WikiPage)
+TracWiki:  [wiki:WikiPage Wiki Link]
 ```
 
-> **Note:** Non-URL-shaped "links" (URL portion contains `:` but no `/`, e.g. sentinel tokens like `[auto-pm: state NEEDS_CODE]`) are emitted verbatim as Markdown rather than wrapped as TracWiki wiki links. This preserves machine-readable state markers through round-trip conversion.
+> **Note:** Link targets that already carry a TracLink resolver prefix -- `wiki:`, `ticket:`, `milestone:`, `source:`, `attachment:`, `changeset:`, and the rest of Trac's built-in resolvers -- are emitted verbatim, not prefixed a second time. This is the form `tracwiki_to_markdown` produces, so a `wiki_get` -> edit -> `wiki_update` round-trip that leaves existing links untouched preserves them exactly. Targets without a prefix (`WikiPage`, `Planning/Phases/Phase01`) get `wiki:` added.
+
+> **Note:** Non-URL-shaped "links" (URL portion contains a `:` that is not a known TracLink resolver, e.g. sentinel tokens like `[auto-pm: state NEEDS_CODE]` or `[label](foo:bar)`) are emitted verbatim as Markdown rather than wrapped as TracWiki wiki links. This preserves machine-readable state markers through round-trip conversion.
 
 **Images:**
 ```
