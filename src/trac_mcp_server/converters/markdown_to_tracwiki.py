@@ -16,6 +16,40 @@ from .common import ConversionResult, markdown_to_tracwiki_lang
 _SLUG_DROP_RE = re.compile(r"[^\w\- ]+")
 _SLUG_WS_RE = re.compile(r"\s+")
 
+# TracLink resolvers that Trac understands natively as the target of
+# `[target text]`.  Deliberately an explicit allowlist rather than
+# "anything scheme-shaped": non-URL sentinels such as ``auto-pm:`` or
+# ``foo:bar`` must stay literal (ticket #8), while real TracLinks that
+# `tracwiki_to_markdown` emits as ``[text](wiki:Page)`` must survive a
+# push back through this converter unchanged (ticket #17).
+_TRACLINK_SCHEMES = frozenset(
+    {
+        "attachment",
+        "browser",
+        "changeset",
+        "comment",
+        "diff",
+        "export",
+        "htdocs",
+        "log",
+        "milestone",
+        "query",
+        "raw-attachment",
+        "report",
+        "repos",
+        "search",
+        "source",
+        "ticket",
+        "timeline",
+        "wiki",
+    }
+)
+# scheme:target — target must be non-empty, so a bare ``auto-pm:``
+# sentinel never matches even if its scheme were listed above.
+_TRACLINK_RE = re.compile(
+    r"(?P<scheme>[A-Za-z][\w+.-]*):(?P<target>\S.*)\Z"
+)
+
 
 def _heading_slug(rendered_text: str) -> str:
     """Return the GitHub-style anchor slug for a rendered heading text.
@@ -190,6 +224,7 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
         Markdown: [text](url)
         TracWiki: [url text] for external URLs
+                  [url text] for already-resolved TracLinks (wiki:, ticket:, ...)
                   [wiki:page text] for internal wiki pages
 
         Refuses non-URL-shaped "links" (e.g., sentinels like ``auto-pm:``)
@@ -205,14 +240,31 @@ class TracWikiRenderer(mistune.BaseRenderer):
         if url.startswith("#"):
             return f"[{url} {text}]"
 
+        # Already-resolved TracLinks (`wiki:Page`, `ticket:42`,
+        # `source:trunk/f.py`, ...) are valid TracWiki targets as they
+        # stand — emit them verbatim. This is what `tracwiki_to_markdown`
+        # produces, so a wiki_get -> wiki_update round-trip that leaves
+        # existing links untouched no longer corrupts them (ticket #17).
+        traclink = _TRACLINK_RE.match(url)
+        if (
+            traclink
+            and traclink.group("scheme").lower() in _TRACLINK_SCHEMES
+        ):
+            # `<wiki:Page>` autolinks arrive with text == url; `[target]`
+            # is the tidier equivalent of `[target target]`.
+            if text == url:
+                return f"[{url}]"
+            return f"[{url} {text}]"
+
         # Refuse non-URL-shaped "links". A real URL or wiki link either
         # starts with a known scheme (handled above), is an anchor
-        # (handled above), or is a wiki-page-shaped path. The conservative
-        # rule: the url portion must contain "/" OR not contain ":" at all.
-        # A bare trailing-colon sentinel like "auto-pm:" fails both checks
-        # and must NOT be wrapped as a wiki link — emit the original
-        # Markdown link syntax verbatim so the text is preserved downstream.
-        if ":" in url and "/" not in url:
+        # (handled above), or is a wiki-page-shaped path. Wiki page names
+        # never contain ":" — Trac reserves it for the resolvers listed in
+        # _TRACLINK_SCHEMES — so any ":" still present here means the url
+        # is a sentinel like "auto-pm:" or "foo:bar", not a page path.
+        # Emit the original Markdown link syntax verbatim so the text is
+        # preserved downstream rather than wrapped as a broken wiki link.
+        if ":" in url:
             return f"[{text}]({url})"
 
         # Internal wiki links - add wiki: prefix

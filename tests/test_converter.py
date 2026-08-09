@@ -209,6 +209,101 @@ plain code
             "[wiki:HomePage Home]",
         )
 
+    def test_traclink_url_emitted_verbatim(self):
+        """`wiki:`-prefixed link targets convert to working TracWiki links.
+
+        Regression test for ticket #17: ``[Hardware](wiki:BnodeHardware)``
+        -- exactly what ``tracwiki_to_markdown`` emits for a native
+        ``[wiki:BnodeHardware Hardware]`` link -- was left as literal
+        Markdown by the ``":" in url and "/" not in url`` guard, and the
+        multi-segment form ``wiki:b-node/blog`` was double-prefixed into
+        ``[wiki:wiki:b-node/blog Blog]``. Both must now emit the target
+        verbatim.
+        """
+        self.assertEqual(
+            markdown_to_tracwiki("[Hardware](wiki:BnodeHardware)"),
+            "[wiki:BnodeHardware Hardware]",
+        )
+        self.assertEqual(
+            markdown_to_tracwiki("[Blog](wiki:b-node/blog)"),
+            "[wiki:b-node/blog Blog]",
+        )
+
+    def test_traclink_other_resolvers(self):
+        """Non-wiki TracLink resolvers survive too, single- and multi-segment.
+
+        Ticket #17: the same guard corrupted every TracLink resolver, not
+        just ``wiki:`` -- single-segment targets (``ticket:42``) fell
+        through as literal Markdown, multi-segment ones
+        (``source:trunk/foo.py``) got a spurious ``wiki:`` prefix.
+        """
+        for url, text, expected in [
+            ("ticket:42", "Bug", "[ticket:42 Bug]"),
+            ("milestone:1.0", "M", "[milestone:1.0 M]"),
+            ("htdocs:style.css", "css", "[htdocs:style.css css]"),
+            ("attachment:file.txt", "att", "[attachment:file.txt att]"),
+            (
+                "raw-attachment:f.txt",
+                "raw",
+                "[raw-attachment:f.txt raw]",
+            ),
+            (
+                "source:trunk/foo.py",
+                "file",
+                "[source:trunk/foo.py file]",
+            ),
+            ("changeset:abc123", "rev", "[changeset:abc123 rev]"),
+        ]:
+            with self.subTest(url=url):
+                self.assertEqual(
+                    markdown_to_tracwiki(f"[{text}]({url})"), expected
+                )
+
+    def test_traclink_round_trips_through_both_converters(self):
+        """wiki_get -> wiki_update round-trip leaves existing links intact.
+
+        The end-to-end shape of ticket #17: pull TracWiki through
+        ``tracwiki_to_markdown``, push the untouched result back through
+        ``markdown_to_tracwiki``, and the link must come out identical.
+        """
+        for tracwiki in [
+            "[wiki:BnodeHardware Hardware]",
+            "[wiki:b-node/blog Blog]",
+            "[ticket:42 Bug]",
+            "[source:trunk/foo.py file]",
+            "[milestone:1.0 M]",
+            "[http://example.com ext]",
+            "[#anchor jump]",
+        ]:
+            with self.subTest(tracwiki=tracwiki):
+                markdown = tracwiki_to_markdown(tracwiki).text
+                self.assertEqual(
+                    markdown_to_tracwiki(markdown).strip(), tracwiki
+                )
+
+    def test_traclink_autolink_form(self):
+        """`<wiki:Page>` autolinks emit `[wiki:Page]`, not a doubled target."""
+        self.assertEqual(
+            markdown_to_tracwiki("<wiki:SomePage>"), "[wiki:SomePage]"
+        )
+
+    def test_unknown_scheme_with_slash_left_literal(self):
+        """Unknown `scheme:` targets stay literal even when they contain "/".
+
+        Ticket #17 removed the ``"/" not in url`` half of the sentinel
+        guard: a wiki page name never contains ":", so anything with a
+        colon that is not a known TracLink resolver is a sentinel, slash
+        or no slash. Previously ``foo:bar/baz`` became the broken
+        ``[wiki:foo:bar/baz label]``.
+        """
+        self.assertEqual(
+            markdown_to_tracwiki("[label](foo:bar/baz)"),
+            "[label](foo:bar/baz)",
+        )
+        self.assertNotIn(
+            "wiki:", markdown_to_tracwiki("[label](foo:bar/baz)")
+        )
+
     def test_image_conversion(self):
         """Test image conversion."""
         result = markdown_to_tracwiki("![alt text](image.png)")
