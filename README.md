@@ -80,6 +80,23 @@ claude mcp add trac -e TRAC_URL=https://trac.example.com \
 
 Any MCP client that supports stdio transport can launch `trac-mcp-server` as a subprocess. Pass Trac credentials via environment variables.
 
+## Format Conversion CLI
+
+The package also installs `trac-convert`, a standalone CLI for converting between TracWiki and Markdown without requiring a Trac connection. Useful for one-off conversions, editor pipelines, and clipboard workflows.
+
+```bash
+# Convert Markdown to TracWiki (stdin → stdout)
+trac-convert --from md --to tracwiki < README.md > README.tw
+
+# Convert a file (auto-detects source format)
+trac-convert --to md notes.tw -o notes.md
+
+# Clipboard round-trip
+trac-convert --from-clipboard --to tracwiki --to-clipboard
+```
+
+Supports stdin/stdout pipes, file I/O, and system clipboard on Linux, macOS, and Windows (via `pyperclip`). See [CLI Reference](docs/reference/cli.md#trac-convert) for the full flag list.
+
 ## Available Tools (42)
 
 ### Tickets (11)
