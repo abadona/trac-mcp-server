@@ -6,7 +6,7 @@ Two scripts provide live testing of `trac-mcp-server` against a running Trac ins
 
 | Script | Purpose | Scope |
 |--------|---------|-------|
-| `scripts/test_trac.py` | Comprehensive tool testing with report generation | All 27 tools: calls, responses, error handling |
+| `scripts/test_trac.py` | Comprehensive tool testing with report generation | Every registered tool: calls, responses, error handling (see "Tools Tested: N/M" in the generated report -- M is fetched live from `list_tools()`, not hardcoded) |
 | `scripts/agent_scenarios.py` | Permission-based agent persona testing | Tool exposure per permission set, reference comparison |
 
 ## Prerequisites
@@ -28,7 +28,7 @@ The server also reads `TRAC_URL`, `TRAC_USERNAME`, `TRAC_PASSWORD` environment v
 
 ## test_trac.py -- Comprehensive Tool Testing
 
-End-to-end test harness (v7.0.0) that validates all 27 MCP tools against a live Trac instance. Exercises the full tool lifecycle from an LLM/agent perspective:
+End-to-end test harness (v8.0.0) that validates the Trac MCP server's tools against a live Trac instance. Exercises the full tool lifecycle from an LLM/agent perspective:
 
 1. **Tool Presentation** -- what the LLM sees when tools are listed (name, description, inputSchema)
 2. **Tool Call** -- the exact arguments sent to each tool
@@ -39,7 +39,7 @@ The generated Markdown report serves as a **reference output** for verifying the
 ### Quick Start
 
 ```bash
-# Run all 27 tool tests (launches trac-mcp-server subprocess)
+# Run all tool tests (launches trac-mcp-server subprocess)
 python scripts/test_trac.py
 
 # Override connection details
@@ -89,17 +89,22 @@ Tests run in a deliberate order that manages resource dependencies:
 | 1 | Connectivity | `ping` |
 | 1b | System tools | `get_server_time` |
 | 2a | Ticket reads | `ticket_search`, `ticket_get`, `ticket_changelog`, `ticket_actions`, `ticket_fields` |
-| 2b | Wiki reads | `wiki_get`, `wiki_search`, `wiki_recent_changes` |
+| 2b | Wiki reads | `wiki_get`, `wiki_get_history`, `wiki_search`, `wiki_recent_changes` |
 | 2c | Milestone reads | `milestone_list`, `milestone_get` |
 | 3a | Ticket writes | `ticket_create`, `ticket_update` |
 | 3b | Wiki writes | `wiki_create`, `wiki_update` |
 | 3c | Milestone writes | `milestone_create`, `milestone_update` |
 | 3d | Wiki file ops | `wiki_file_detect_format`, `wiki_file_push`, `wiki_file_pull` |
 | 3f | Batch tickets | `ticket_batch_create`, `ticket_batch_update`, `ticket_batch_delete` |
+| 3g | Ticket admin | `ticket_component_create`, `ticket_component_list`, `ticket_component_delete`, `ticket_enum_create`, `ticket_enum_list`, `ticket_enum_delete` |
+| 3h | Ticket attachments | `ticket_attachment_put`, `ticket_attachment_list`, `ticket_attachment_get`, `ticket_attachment_delete` |
+| 3i | Wiki attachments | `wiki_attachment_put`, `wiki_attachment_list`, `wiki_attachment_get`, `wiki_attachment_delete` |
 | 4 | Delete ops | `wiki_delete`, `milestone_delete`, `ticket_delete` |
 | 5 | Error handling | Non-existent resources, missing required fields, empty lists |
 
-Write phases (3a-3f) create temporary resources cleaned up in phase 4. The `--tools` flag skips phases that don't contain any of the selected tools.
+Write phases (3a-3i) create temporary resources cleaned up in phase 4 (or immediately, for attachment/admin resources that don't depend on phase-4 deletes). The `--tools` flag skips phases that don't contain any of the selected tools. `ticket_attachment_*` (phase 3h) requires the test ticket from phase 3a; `wiki_attachment_*` (phase 3i) requires the test wiki page from phase 3b -- both phases no-op with a note if run standalone via `--tools` without their dependency.
+
+Not yet covered: `list_instances` (multi-instance support, Trac #18) once merged.
 
 ### Report Structure
 
@@ -117,7 +122,7 @@ The generated Markdown report contains:
 - **isError** -- the error flag from `CallToolResult` (if set)
 - **Text content preview** -- the text response the LLM would read (first 500 chars)
 
-Results are grouped by category: Connectivity, System Tools, Ticket Tools, Batch Ticket Tools, Wiki Tools, Wiki File Tools, Milestone Tools, Error Handling.
+Results are grouped by category: Connectivity, System Tools, Ticket Tools, Batch Ticket Tools, Ticket Admin Tools, Ticket Attachment Tools, Wiki Tools, Wiki File Tools, Wiki Attachment Tools, Milestone Tools, Error Handling.
 
 **Issues Found** -- Lists all failed tests with error details.
 
@@ -130,6 +135,12 @@ Results are grouped by category: Connectivity, System Tools, Ticket Tools, Batch
 | Wiki page (file test) | `MCPFileTest_<timestamp>` | Phase 3d | Phase 3d |
 | Milestone | `MCP-Test-<timestamp>` | Phase 3c | Phase 4 |
 | Batch tickets | `[MCP BATCH <timestamp>] ...` | Phase 3f | Phase 3f |
+| Ticket component | `MCPComponent_<timestamp>` | Phase 3g | Phase 3g |
+| Enum value (`severity`) | `MCPSeverity<timestamp>` | Phase 3g | Phase 3g |
+| Ticket attachment | `mcp_test_<timestamp>.txt` (on phase 3a's ticket) | Phase 3h | Phase 3h |
+| Wiki attachment | `mcp_test_<timestamp>.txt` (on phase 3b's page) | Phase 3i | Phase 3i |
+
+Any of the above left over from a failed mid-run (component, enum value, ticket/wiki attachment) are also swept up in the final `cleanup()` pass, same as tickets/pages/milestones.
 
 ### Batch Test Configuration
 
@@ -195,12 +206,12 @@ Adding a new scenario requires no code changes -- just add the file pair.
 
 | Scenario | Permissions | Expected Tools | Description |
 |----------|-------------|:--------------:|-------------|
-| `readonly` | TICKET_VIEW, WIKI_VIEW, MILESTONE_VIEW | 14 | Read-only agent, no modifications |
-| `ticket_manager` | 9 perms (all ticket + all milestone) | 19 | Ticket/milestone management, no wiki |
-| `wiki_editor` | WIKI_VIEW, WIKI_CREATE, WIKI_MODIFY | 10 | Wiki editing, no tickets or milestones |
-| `full_access` | All 13 permissions | 27 | Unrestricted access to all tools |
+| `readonly` | TICKET_VIEW, WIKI_VIEW, MILESTONE_VIEW | 21 | Read-only agent, no modifications |
+| `ticket_manager` | 10 perms (all ticket + all milestone) | 29 | Ticket/milestone management, no wiki |
+| `wiki_editor` | WIKI_VIEW, WIKI_CREATE, WIKI_MODIFY | 14 | Wiki editing, no tickets or milestones |
+| `full_access` | All 14 permissions | 42 | Unrestricted access to all tools |
 
-System tools (`ping`, `get_server_time`, `wiki_file_detect_format`) require no permissions and are always available.
+System tools (`ping`, `get_server_time`, `wiki_file_detect_format`) require no permissions and are always available. Tool counts above are pinned to the reference `.expected_tools.txt` files under `scripts/scenarios/` -- regenerate them with `--update-refs` (see below) after adding, removing, or re-permissioning a tool; `agent_scenarios.py` fails loudly on drift, so a stale table here is just documentation lag, not a live risk.
 
 #### Example Permission File
 
