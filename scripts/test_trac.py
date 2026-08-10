@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-Comprehensive MCP Tool Live Testing (v7.0.0)
+Comprehensive MCP Tool Live Testing (v8.0.0)
 
-Tests all 27 Trac MCP server tools against a live Trac server instance
+Tests the Trac MCP server's tools against a live Trac server instance
 via MCP stdio protocol. Communicates with trac-mcp-server binary as a
 real MCP client (same protocol path as Claude Desktop/Code).
 
+Coverage is intentionally not exhaustive of every registered tool (see
+"Executive Summary" / "Tools Tested: N/M" in the generated report for the
+live count, fetched from the server itself via list_tools() rather than
+hardcoded here). As of v8.0.0 this covers: ping + system + ticket read/write
++ batch ticket + ticket admin (components, enums) + ticket attachments +
+wiki read/write/history + wiki files + wiki attachments + milestones.
+
 Features:
-- Tests all 27 tools: ping + 8 ticket + 3 batch ticket + 6 wiki + 3 wiki_file + 5 milestone + 1 system
 - Communicates via MCP stdio protocol (launches trac-mcp-server as subprocess)
 - --tools flag selects a subset of tools to test and filters Tool Catalog
 - --permissions-file passes permission restrictions to the server subprocess
@@ -38,7 +44,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from trac_mcp_server import __version__ as PACKAGE_VERSION
 
-VERSION = "7.0.0"
+VERSION = "8.0.0"
 
 # Number of tickets to create in batch tests.
 # Keep small for routine testing; increase for load/stress testing.
@@ -130,6 +136,10 @@ class ComprehensiveMCPTester:
         self.test_wiki_page: Optional[str] = None
         self.test_milestone: Optional[str] = None
         self.test_batch_ticket_ids: list[int] = []
+        self.test_component: Optional[str] = None
+        self.test_enum: Optional[tuple[str, str]] = None
+        self.test_ticket_attachment_filename: Optional[str] = None
+        self.test_wiki_attachment_filename: Optional[str] = None
 
     def _should_test_tool(self, tool_name: str) -> bool:
         """Check if a tool should be tested based on --tools filter."""
@@ -519,6 +529,23 @@ class ComprehensiveMCPTester:
             )
             self.report.results.append(result)
             self._log_result(result)
+
+        # wiki_get_history
+        _args = {"page_name": "WikiStart"}
+        success, response, raw_result = await self._call_tool(
+            "wiki_get_history", _args
+        )
+        result = CheckResult(
+            tool="wiki_get_history",
+            test_name="history",
+            passed=success and "history" in response.lower(),
+            response=response[:300],
+            notes="Retrieved WikiStart revision history",
+            call_args=_args,
+            **_extract_raw_fields(raw_result),
+        )
+        self.report.results.append(result)
+        self._log_result(result)
 
         # wiki_search
         _args = {"query": "wiki"}
@@ -1373,6 +1400,396 @@ print('hello')
         self.report.results.append(result)
         self._log_result(result)
 
+    async def test_ticket_admin_operations(self):
+        """Phase 3g: Test ticket admin operations (components, enums)"""
+        print(
+            f"\n{self._color('=== Phase 3g: Ticket Admin Operations ===')}"
+        )
+
+        # ticket_component_create
+        self.test_component = f"MCPComponent_{self.timestamp}"
+        _args = {
+            "name": self.test_component,
+            "description": "MCP test component",
+        }
+        success, response, raw_result = await self._call_tool(
+            "ticket_component_create", _args
+        )
+        result = CheckResult(
+            tool="ticket_component_create",
+            test_name="create_component",
+            passed=success and "created" in response.lower(),
+            response=response,
+            notes=f"Created: {self.test_component}"
+            if success
+            else "Creation failed",
+            call_args=_args,
+            **_extract_raw_fields(raw_result),
+        )
+        self.report.results.append(result)
+        self._log_result(result)
+
+        if success:
+            # ticket_component_list - verify presence
+            success, response, raw_result = await self._call_tool(
+                "ticket_component_list"
+            )
+            result = CheckResult(
+                tool="ticket_component_list",
+                test_name="verify_created",
+                passed=success and self.test_component in response,
+                response=response[:300],
+                notes="Verified component appears in list",
+                **_extract_raw_fields(raw_result),
+            )
+            self.report.results.append(result)
+            self._log_result(result)
+
+            # ticket_component_delete
+            _args = {"name": self.test_component}
+            success, response, raw_result = await self._call_tool(
+                "ticket_component_delete", _args
+            )
+            result = CheckResult(
+                tool="ticket_component_delete",
+                test_name="delete_component",
+                passed=success and "deleted" in response.lower(),
+                response=response,
+                notes=f"Deleted: {self.test_component}",
+                call_args=_args,
+                **_extract_raw_fields(raw_result),
+            )
+            self.report.results.append(result)
+            self._log_result(result)
+            if success:
+                self.test_component = None
+
+        # ticket_enum_create -- "severity" accepts free-form values without
+        # the ordering semantics "version" has, so it's the safest enum
+        # type for a throwaway test value.
+        self.test_enum = ("severity", f"MCPSeverity{self.timestamp}")
+        enum_type, enum_name = self.test_enum
+        _args = {"enum_type": enum_type, "name": enum_name}
+        success, response, raw_result = await self._call_tool(
+            "ticket_enum_create", _args
+        )
+        result = CheckResult(
+            tool="ticket_enum_create",
+            test_name="create_enum",
+            passed=success and "created" in response.lower(),
+            response=response,
+            notes=f"Created {enum_type} value: {enum_name}"
+            if success
+            else "Creation failed",
+            call_args=_args,
+            **_extract_raw_fields(raw_result),
+        )
+        self.report.results.append(result)
+        self._log_result(result)
+
+        if success:
+            # ticket_enum_list - verify presence
+            _args = {"enum_type": enum_type}
+            success, response, raw_result = await self._call_tool(
+                "ticket_enum_list", _args
+            )
+            result = CheckResult(
+                tool="ticket_enum_list",
+                test_name="verify_created",
+                passed=success and enum_name in response,
+                response=response[:300],
+                notes="Verified enum value appears in list",
+                call_args=_args,
+                **_extract_raw_fields(raw_result),
+            )
+            self.report.results.append(result)
+            self._log_result(result)
+
+            # ticket_enum_delete
+            _args = {"enum_type": enum_type, "name": enum_name}
+            success, response, raw_result = await self._call_tool(
+                "ticket_enum_delete", _args
+            )
+            result = CheckResult(
+                tool="ticket_enum_delete",
+                test_name="delete_enum",
+                passed=success and "deleted" in response.lower(),
+                response=response,
+                notes=f"Deleted {enum_type} value: {enum_name}",
+                call_args=_args,
+                **_extract_raw_fields(raw_result),
+            )
+            self.report.results.append(result)
+            self._log_result(result)
+            if success:
+                self.test_enum = None
+
+    async def test_ticket_attachment_operations(self):
+        """Phase 3h: Test ticket attachment operations"""
+        print(
+            f"\n{self._color('=== Phase 3h: Ticket Attachment Operations ===')}"
+        )
+
+        if not self.test_ticket_id:
+            print("  (skipped: no test ticket available)")
+            return
+
+        import os
+        import tempfile
+
+        attach_path = os.path.join(
+            tempfile.gettempdir(),
+            f"mcp_ticket_attach_{self.timestamp}.txt",
+        )
+        attach_content = (
+            f"MCP ticket attachment test {self.timestamp}\n"
+        )
+        with open(attach_path, "w") as f:
+            f.write(attach_content)
+
+        try:
+            filename = f"mcp_test_{self.timestamp}.txt"
+            _args = {
+                "ticket_id": self.test_ticket_id,
+                "file_path": attach_path,
+                "filename": filename,
+                "description": "MCP attachment test",
+            }
+            success, response, raw_result = await self._call_tool(
+                "ticket_attachment_put", _args
+            )
+            result = CheckResult(
+                tool="ticket_attachment_put",
+                test_name="upload",
+                passed=success and "Uploaded attachment" in response,
+                response=response,
+                notes=f"Uploaded: {filename}"
+                if success
+                else "Upload failed",
+                call_args=_args,
+                **_extract_raw_fields(raw_result),
+            )
+            self.report.results.append(result)
+            self._log_result(result)
+
+            if success:
+                self.test_ticket_attachment_filename = filename
+
+                # ticket_attachment_list
+                _args = {"ticket_id": self.test_ticket_id}
+                success, response, raw_result = await self._call_tool(
+                    "ticket_attachment_list", _args
+                )
+                result = CheckResult(
+                    tool="ticket_attachment_list",
+                    test_name="list_attachments",
+                    passed=success and filename in response,
+                    response=response[:300],
+                    notes="Verified attachment appears in list",
+                    call_args=_args,
+                    **_extract_raw_fields(raw_result),
+                )
+                self.report.results.append(result)
+                self._log_result(result)
+
+                # ticket_attachment_get - download and verify byte-identical
+                download_path = os.path.join(
+                    tempfile.gettempdir(),
+                    f"mcp_ticket_download_{self.timestamp}.txt",
+                )
+                _args = {
+                    "ticket_id": self.test_ticket_id,
+                    "filename": filename,
+                    "output_path": download_path,
+                }
+                success, response, raw_result = await self._call_tool(
+                    "ticket_attachment_get", _args
+                )
+                result = CheckResult(
+                    tool="ticket_attachment_get",
+                    test_name="download",
+                    passed=success
+                    and "Downloaded attachment" in response,
+                    response=response,
+                    notes="Downloaded attachment to temp file",
+                    call_args=_args,
+                    **_extract_raw_fields(raw_result),
+                )
+                self.report.results.append(result)
+                self._log_result(result)
+
+                if os.path.exists(download_path):
+                    with open(download_path) as f:
+                        downloaded_content = f.read()
+                    result = CheckResult(
+                        tool="ticket_attachment_get",
+                        test_name="verify_bytes",
+                        passed=downloaded_content == attach_content,
+                        response=downloaded_content[:200],
+                        notes="Verified byte-identical round-trip",
+                    )
+                    self.report.results.append(result)
+                    self._log_result(result)
+                    os.unlink(download_path)
+
+                # ticket_attachment_delete
+                _args = {
+                    "ticket_id": self.test_ticket_id,
+                    "filename": filename,
+                }
+                success, response, raw_result = await self._call_tool(
+                    "ticket_attachment_delete", _args
+                )
+                result = CheckResult(
+                    tool="ticket_attachment_delete",
+                    test_name="delete",
+                    passed=success and "Deleted attachment" in response,
+                    response=response,
+                    notes=f"Deleted: {filename}",
+                    call_args=_args,
+                    **_extract_raw_fields(raw_result),
+                )
+                self.report.results.append(result)
+                self._log_result(result)
+                if success:
+                    self.test_ticket_attachment_filename = None
+
+        finally:
+            if os.path.exists(attach_path):
+                os.unlink(attach_path)
+
+    async def test_wiki_attachment_operations(self):
+        """Phase 3i: Test wiki attachment operations"""
+        print(
+            f"\n{self._color('=== Phase 3i: Wiki Attachment Operations ===')}"
+        )
+
+        if not self.test_wiki_page:
+            print("  (skipped: no test wiki page available)")
+            return
+
+        import os
+        import tempfile
+
+        attach_path = os.path.join(
+            tempfile.gettempdir(),
+            f"mcp_wiki_attach_{self.timestamp}.txt",
+        )
+        attach_content = f"MCP wiki attachment test {self.timestamp}\n"
+        with open(attach_path, "w") as f:
+            f.write(attach_content)
+
+        try:
+            filename = f"mcp_test_{self.timestamp}.txt"
+            _args = {
+                "page_name": self.test_wiki_page,
+                "file_path": attach_path,
+                "filename": filename,
+                "description": "MCP attachment test",
+            }
+            success, response, raw_result = await self._call_tool(
+                "wiki_attachment_put", _args
+            )
+            result = CheckResult(
+                tool="wiki_attachment_put",
+                test_name="upload",
+                passed=success and "Uploaded attachment" in response,
+                response=response,
+                notes=f"Uploaded: {filename}"
+                if success
+                else "Upload failed",
+                call_args=_args,
+                **_extract_raw_fields(raw_result),
+            )
+            self.report.results.append(result)
+            self._log_result(result)
+
+            if success:
+                self.test_wiki_attachment_filename = filename
+
+                # wiki_attachment_list
+                _args = {"page_name": self.test_wiki_page}
+                success, response, raw_result = await self._call_tool(
+                    "wiki_attachment_list", _args
+                )
+                result = CheckResult(
+                    tool="wiki_attachment_list",
+                    test_name="list_attachments",
+                    passed=success and filename in response,
+                    response=response[:300],
+                    notes="Verified attachment appears in list",
+                    call_args=_args,
+                    **_extract_raw_fields(raw_result),
+                )
+                self.report.results.append(result)
+                self._log_result(result)
+
+                # wiki_attachment_get - download and verify byte-identical
+                download_path = os.path.join(
+                    tempfile.gettempdir(),
+                    f"mcp_wiki_download_{self.timestamp}.txt",
+                )
+                _args = {
+                    "page_name": self.test_wiki_page,
+                    "filename": filename,
+                    "output_path": download_path,
+                }
+                success, response, raw_result = await self._call_tool(
+                    "wiki_attachment_get", _args
+                )
+                result = CheckResult(
+                    tool="wiki_attachment_get",
+                    test_name="download",
+                    passed=success
+                    and "Downloaded attachment" in response,
+                    response=response,
+                    notes="Downloaded attachment to temp file",
+                    call_args=_args,
+                    **_extract_raw_fields(raw_result),
+                )
+                self.report.results.append(result)
+                self._log_result(result)
+
+                if os.path.exists(download_path):
+                    with open(download_path) as f:
+                        downloaded_content = f.read()
+                    result = CheckResult(
+                        tool="wiki_attachment_get",
+                        test_name="verify_bytes",
+                        passed=downloaded_content == attach_content,
+                        response=downloaded_content[:200],
+                        notes="Verified byte-identical round-trip",
+                    )
+                    self.report.results.append(result)
+                    self._log_result(result)
+                    os.unlink(download_path)
+
+                # wiki_attachment_delete
+                _args = {
+                    "page_name": self.test_wiki_page,
+                    "filename": filename,
+                }
+                success, response, raw_result = await self._call_tool(
+                    "wiki_attachment_delete", _args
+                )
+                result = CheckResult(
+                    tool="wiki_attachment_delete",
+                    test_name="delete",
+                    passed=success and "Deleted attachment" in response,
+                    response=response,
+                    notes=f"Deleted: {filename}",
+                    call_args=_args,
+                    **_extract_raw_fields(raw_result),
+                )
+                self.report.results.append(result)
+                self._log_result(result)
+                if success:
+                    self.test_wiki_attachment_filename = None
+
+        finally:
+            if os.path.exists(attach_path):
+                os.unlink(attach_path)
+
     async def test_delete_operations(self):
         """Phase 4: Test delete operations"""
         print(f"\n{self._color('=== Phase 4: Delete Operations ===')}")
@@ -1689,6 +2106,80 @@ print('hello')
                 )
                 cleanup_success = False
 
+        # Delete leftover ticket attachment (if delete test failed/was skipped)
+        if self.test_ticket_attachment_filename and self.test_ticket_id:
+            success, _, _ = await self._call_tool(
+                "ticket_attachment_delete",
+                {
+                    "ticket_id": self.test_ticket_id,
+                    "filename": self.test_ticket_attachment_filename,
+                },
+            )
+            if success:
+                print(
+                    f"  {self._color('OK')} Deleted leftover ticket attachment: {self.test_ticket_attachment_filename}"
+                )
+                self.test_ticket_attachment_filename = None
+            else:
+                print(
+                    f"  {self._color('FAIL')} Could not delete ticket attachment: {self.test_ticket_attachment_filename}"
+                )
+                cleanup_success = False
+
+        # Delete leftover wiki attachment (if delete test failed/was skipped)
+        if self.test_wiki_attachment_filename and self.test_wiki_page:
+            success, _, _ = await self._call_tool(
+                "wiki_attachment_delete",
+                {
+                    "page_name": self.test_wiki_page,
+                    "filename": self.test_wiki_attachment_filename,
+                },
+            )
+            if success:
+                print(
+                    f"  {self._color('OK')} Deleted leftover wiki attachment: {self.test_wiki_attachment_filename}"
+                )
+                self.test_wiki_attachment_filename = None
+            else:
+                print(
+                    f"  {self._color('FAIL')} Could not delete wiki attachment: {self.test_wiki_attachment_filename}"
+                )
+                cleanup_success = False
+
+        # Delete leftover ticket component (if delete test failed/was skipped)
+        if self.test_component:
+            success, _, _ = await self._call_tool(
+                "ticket_component_delete", {"name": self.test_component}
+            )
+            if success:
+                print(
+                    f"  {self._color('OK')} Deleted leftover component: {self.test_component}"
+                )
+                self.test_component = None
+            else:
+                print(
+                    f"  {self._color('FAIL')} Could not delete component: {self.test_component}"
+                )
+                cleanup_success = False
+
+        # Delete leftover enum value (if delete test failed/was skipped)
+        if self.test_enum:
+            enum_type, enum_name = self.test_enum
+            success, _, _ = await self._call_tool(
+                "ticket_enum_delete",
+                {"enum_type": enum_type, "name": enum_name},
+            )
+            if success:
+                print(
+                    f"  {self._color('OK')} Deleted leftover {enum_type} value: {enum_name}"
+                )
+                self.test_enum = None
+            else:
+                print(
+                    f"  {self._color('FAIL')} Could not delete {enum_type} value: {enum_name}"
+                )
+                cleanup_success = False
+
         return cleanup_success
 
     def _generate_tool_catalog(self) -> list[str]:
@@ -1741,8 +2232,11 @@ print('hello')
             "System Tools": [],
             "Ticket Tools": [],
             "Batch Ticket Tools": [],
+            "Ticket Admin Tools": [],
+            "Ticket Attachment Tools": [],
             "Wiki Tools": [],
             "Wiki File Tools": [],
+            "Wiki Attachment Tools": [],
             "Milestone Tools": [],
             "Error Handling": [],
         }
@@ -1760,6 +2254,14 @@ print('hello')
                     results_by_category["Batch Ticket Tools"].append(
                         result
                     )
+            elif result.tool.startswith(
+                ("ticket_component_", "ticket_enum_")
+            ):
+                results_by_category["Ticket Admin Tools"].append(result)
+            elif result.tool.startswith("ticket_attachment_"):
+                results_by_category["Ticket Attachment Tools"].append(
+                    result
+                )
             elif result.tool.startswith("ticket_"):
                 if (
                     "non_existent" in result.test_name
@@ -1775,6 +2277,10 @@ print('hello')
                     results_by_category["Wiki File Tools"].append(
                         result
                     )
+            elif result.tool.startswith("wiki_attachment_"):
+                results_by_category["Wiki Attachment Tools"].append(
+                    result
+                )
             elif result.tool.startswith("wiki_"):
                 if "non_existent" in result.test_name:
                     results_by_category["Error Handling"].append(result)
@@ -1797,7 +2303,7 @@ print('hello')
             "",
             "## Executive Summary",
             "",
-            f"- **Tools Tested:** {len(tools_tested)}/27",
+            f"- **Tools Tested:** {len(tools_tested)}/{len(self.available_tools)}",
             f"- **Total Scenarios:** {self.report.total}",
             f"- **Passed:** {self.report.passed}",
             f"- **Failed:** {self.report.failed}",
@@ -1997,6 +2503,44 @@ print('hello')
             }
             if not self.tools_filter or self.tools_filter & batch_tools:
                 await self.test_ticket_batch_operations()
+
+            ticket_admin_tools = {
+                "ticket_component_create",
+                "ticket_component_list",
+                "ticket_component_delete",
+                "ticket_enum_create",
+                "ticket_enum_list",
+                "ticket_enum_delete",
+            }
+            if (
+                not self.tools_filter
+                or self.tools_filter & ticket_admin_tools
+            ):
+                await self.test_ticket_admin_operations()
+
+            ticket_attachment_tools = {
+                "ticket_attachment_put",
+                "ticket_attachment_get",
+                "ticket_attachment_list",
+                "ticket_attachment_delete",
+            }
+            if (
+                not self.tools_filter
+                or self.tools_filter & ticket_attachment_tools
+            ):
+                await self.test_ticket_attachment_operations()
+
+            wiki_attachment_tools = {
+                "wiki_attachment_put",
+                "wiki_attachment_get",
+                "wiki_attachment_list",
+                "wiki_attachment_delete",
+            }
+            if (
+                not self.tools_filter
+                or self.tools_filter & wiki_attachment_tools
+            ):
+                await self.test_wiki_attachment_operations()
 
             # Phase 4: Delete operations
             delete_tools = {
