@@ -13,6 +13,7 @@ from trac_mcp_server.cli.convert import (
     EXIT_OK,
     EXIT_RUNTIME_ERROR,
     EXIT_USAGE_ERROR,
+    ClipboardUnavailableError,
     build_parser,
     convert_text,
     main,
@@ -312,6 +313,64 @@ def test_main_missing_input_file_returns_1_with_stderr_message(
     assert str(missing) in err
 
 
+def test_from_file_flag_reads_file_and_writes_to_stdout(
+    tmp_path, capsys
+):
+    """--from-file PATH reads the file and converts to stdout."""
+    in_file = tmp_path / "in.md"
+    in_file.write_text("# Hello", encoding="utf-8")
+    exit_code = main(["--from-file", str(in_file), "--to", "tracwiki"])
+    assert exit_code == 0
+    assert "= Hello" in capsys.readouterr().out
+
+
+def test_from_file_flag_missing_file_returns_1(tmp_path, capsys):
+    """--from-file with a non-existent path exits 1 with a message."""
+    missing = tmp_path / "no_such.md"
+    exit_code = main(["--from-file", str(missing), "--to", "md"])
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "cannot read input file" in err
+    assert str(missing) in err
+
+
+def test_from_file_and_positional_file_are_mutually_exclusive(
+    tmp_path, capsys
+):
+    """--from-file and positional FILE together exit 1."""
+    f = tmp_path / "x.md"
+    f.write_text("hi", encoding="utf-8")
+    exit_code = main(["--from-file", str(f), str(f), "--to", "md"])
+    assert exit_code == 1
+    assert "--from-file" in capsys.readouterr().err
+
+
+def test_from_file_and_from_clipboard_are_mutually_exclusive(
+    tmp_path, capsys
+):
+    """--from-file and --from-clipboard together exit 1."""
+    f = tmp_path / "x.md"
+    f.write_text("hi", encoding="utf-8")
+    exit_code = main(
+        ["--from-file", str(f), "--from-clipboard", "--to", "md"]
+    )
+    assert exit_code == 1
+    assert "--from-clipboard" in capsys.readouterr().err
+
+
+def test_from_file_and_from_wiki_are_mutually_exclusive(
+    tmp_path, capsys
+):
+    """--from-file and --from-wiki together exit 1."""
+    f = tmp_path / "x.md"
+    f.write_text("hi", encoding="utf-8")
+    exit_code = main(
+        ["--from-file", str(f), "--from-wiki", "MyPage", "--to", "md"]
+    )
+    assert exit_code == 1
+    assert "--from-wiki" in capsys.readouterr().err
+
+
 def test_main_writes_to_output_file_and_leaves_stdout_empty(
     monkeypatch, tmp_path, capsys
 ):
@@ -423,29 +482,51 @@ def test_to_clipboard_and_output_mutually_exclusive(tmp_path, capsys):
 
 
 def test_main_reads_from_clipboard(monkeypatch, capsys):
-    """--from-clipboard reads from pyperclip.paste() and converts."""
-    monkeypatch.setattr(pyperclip, "paste", lambda: "= Hello =")
+    """--from-clipboard reads via read_clipboard() and converts."""
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.read_clipboard",
+        lambda: "= Hello =",
+    )
     exit_code = main(["--from-clipboard", "--to", "md"])
     assert exit_code == 0
     assert capsys.readouterr().out.startswith("# Hello")
 
 
 def test_clipboard_read_error_returns_1(monkeypatch, capsys):
-    """PyperclipException on paste() → exit 1 with 'clipboard read failed'."""
+    """ClipboardUnavailableError on read → exit 1 with 'clipboard read failed'."""
+
+    def raise_paste():
+        raise ClipboardUnavailableError("no mechanism")
+
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.read_clipboard", raise_paste
+    )
+    exit_code = main(["--from-clipboard", "--to", "md"])
+    assert exit_code == 1
+    assert "clipboard read failed" in capsys.readouterr().err
+
+
+def test_clipboard_read_pyperclip_error_returns_1(monkeypatch, capsys):
+    """Legacy PyperclipException from read_clipboard() also returns exit 1."""
 
     def raise_paste():
         raise pyperclip.PyperclipException("no mechanism")
 
-    monkeypatch.setattr(pyperclip, "paste", raise_paste)
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.read_clipboard", raise_paste
+    )
     exit_code = main(["--from-clipboard", "--to", "md"])
     assert exit_code == 1
     assert "clipboard read failed" in capsys.readouterr().err
 
 
 def test_main_writes_to_clipboard(monkeypatch, capsys):
-    """--to-clipboard passes converted text to pyperclip.copy(); stdout empty."""
+    """--to-clipboard passes converted text to write_clipboard(); stdout empty."""
     copied = []
-    monkeypatch.setattr(pyperclip, "copy", lambda t: copied.append(t))
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.write_clipboard",
+        lambda t: copied.append(t),
+    )
     monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
     exit_code = main(
         ["--from", "md", "--to", "tracwiki", "--to-clipboard"]
@@ -457,12 +538,14 @@ def test_main_writes_to_clipboard(monkeypatch, capsys):
 
 
 def test_clipboard_write_error_returns_1(monkeypatch):
-    """PyperclipException on copy() → exit 1 with 'clipboard write failed'."""
+    """ClipboardUnavailableError on write → exit 1 with 'clipboard write failed'."""
 
     def raise_copy(_):
-        raise pyperclip.PyperclipException("no mechanism")
+        raise ClipboardUnavailableError("no mechanism")
 
-    monkeypatch.setattr(pyperclip, "copy", raise_copy)
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.write_clipboard", raise_copy
+    )
     monkeypatch.setattr("sys.stdin", io.StringIO("# Hello"))
     exit_code = main(
         ["--from", "md", "--to", "tracwiki", "--to-clipboard"]
@@ -475,13 +558,14 @@ def test_clipboard_write_error_returns_1(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_heading_anchors_on_by_default(monkeypatch, capsys):
-    """--heading-anchors defaults to on; stdout includes the #slug suffix."""
+def test_heading_anchors_off_by_default(monkeypatch, capsys):
+    """--heading-anchors defaults to off; stdout has no #slug suffix."""
     monkeypatch.setattr("sys.stdin", io.StringIO("# H"))
     exit_code = main(["--from", "md", "--to", "tracwiki"])
     assert exit_code == 0
     out = capsys.readouterr().out
-    assert out.startswith("= H = #h")
+    assert out.startswith("= H =")
+    assert "#h" not in out
 
 
 def test_heading_anchors_off_omits_slug(monkeypatch, capsys):
@@ -1268,7 +1352,7 @@ def test_roundtrip_tw_unknown_macro_preserve_mode_roundtrips(
 def test_roundtrip_md_heading_anchor_survives_when_on(
     monkeypatch, capsys
 ):
-    """With --heading-anchors on (default), slug appears in tw intermediate but NOT in final md.
+    """With --heading-anchors on, slug appears in tw intermediate but NOT in final md.
 
     The md→tw→md path drops the anchor cleanly: the TracWiki #slug is not
     rendered back to Markdown, so the final md is semantically identical
@@ -1277,8 +1361,10 @@ def test_roundtrip_md_heading_anchor_survives_when_on(
     """
     md_input = "# My Heading\n"
     monkeypatch.setattr("sys.stdin", io.StringIO(md_input))
-    # First hop: use DEFAULT --heading-anchors on
-    rc1 = main(["--from", "md", "--to", "tracwiki"])
+    # First hop: explicit --heading-anchors on (not the default)
+    rc1 = main(
+        ["--from", "md", "--to", "tracwiki", "--heading-anchors", "on"]
+    )
     assert rc1 == EXIT_OK
     intermediate = capsys.readouterr().out
     # The #slug must appear in the tracwiki intermediate
@@ -1302,8 +1388,7 @@ def test_roundtrip_md_heading_anchor_survives_when_on(
 IO_MATRIX_INPUT = "# Title\n\nBody paragraph with **bold**.\n"
 
 # Leading token of the TracWiki output every combination must produce.
-# Confirmed by: convert_text(IO_MATRIX_INPUT, "md", "tracwiki").text[:16]
-IO_MATRIX_EXPECTED_TW_START = "= Title = #title"
+IO_MATRIX_EXPECTED_TW_START = "= Title ="
 
 
 # ---------------------------------------------------------------------------
@@ -1337,13 +1422,15 @@ def test_io_matrix_stdin_to_file(monkeypatch, tmp_path, capsys):
 
 
 def test_io_matrix_stdin_to_clipboard(monkeypatch, capsys):
-    """Matrix[stdin → clipboard]: output sent to pyperclip.copy(); stdout empty; stderr empty."""
+    """Matrix[stdin → clipboard]: output sent to write_clipboard(); stdout empty; stderr empty."""
     captured = {}
 
     def fake_copy(text):
         captured["text"] = text
 
-    monkeypatch.setattr(pyperclip, "copy", fake_copy)
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.write_clipboard", fake_copy
+    )
     monkeypatch.setattr("sys.stdin", io.StringIO(IO_MATRIX_INPUT))
     exit_code = main(
         ["--from", "md", "--to", "tracwiki", "--to-clipboard"]
@@ -1395,7 +1482,9 @@ def test_io_matrix_file_to_clipboard(monkeypatch, tmp_path, capsys):
     def fake_copy(text):
         captured["text"] = text
 
-    monkeypatch.setattr(pyperclip, "copy", fake_copy)
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.write_clipboard", fake_copy
+    )
     in_file = tmp_path / "in.md"
     in_file.write_text(IO_MATRIX_INPUT, encoding="utf-8")
     exit_code = main(
@@ -1414,8 +1503,11 @@ def test_io_matrix_file_to_clipboard(monkeypatch, tmp_path, capsys):
 
 
 def test_io_matrix_clipboard_to_stdout(monkeypatch, capsys):
-    """Matrix[clipboard → stdout]: --from-clipboard reads via pyperclip.paste(); stdout has output."""
-    monkeypatch.setattr(pyperclip, "paste", lambda: IO_MATRIX_INPUT)
+    """Matrix[clipboard → stdout]: --from-clipboard reads via read_clipboard(); stdout has output."""
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.read_clipboard",
+        lambda: IO_MATRIX_INPUT,
+    )
     exit_code = main(
         ["--from-clipboard", "--from", "md", "--to", "tracwiki"]
     )
@@ -1427,7 +1519,10 @@ def test_io_matrix_clipboard_to_stdout(monkeypatch, capsys):
 
 def test_io_matrix_clipboard_to_file(monkeypatch, tmp_path, capsys):
     """Matrix[clipboard → file]: --from-clipboard → -o FILE; stdout empty; stderr empty."""
-    monkeypatch.setattr(pyperclip, "paste", lambda: IO_MATRIX_INPUT)
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.read_clipboard",
+        lambda: IO_MATRIX_INPUT,
+    )
     out_file = tmp_path / "out.tw"
     exit_code = main(
         [
@@ -1455,8 +1550,13 @@ def test_io_matrix_clipboard_to_clipboard(monkeypatch, capsys):
     def fake_copy(text):
         captured["text"] = text
 
-    monkeypatch.setattr(pyperclip, "paste", lambda: IO_MATRIX_INPUT)
-    monkeypatch.setattr(pyperclip, "copy", fake_copy)
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.read_clipboard",
+        lambda: IO_MATRIX_INPUT,
+    )
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.write_clipboard", fake_copy
+    )
     exit_code = main(
         [
             "--from-clipboard",
@@ -1527,7 +1627,10 @@ def test_warnings_reach_stderr_when_output_is_clipboard(
     )
     monkeypatch.setattr("sys.stdin", io.StringIO(IO_MATRIX_INPUT))
     copied = []
-    monkeypatch.setattr(pyperclip, "copy", lambda t: copied.append(t))
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.write_clipboard",
+        lambda t: copied.append(t),
+    )
     exit_code = main(["--to", "tracwiki", "--to-clipboard"])
     assert exit_code == EXIT_OK
     captured = capsys.readouterr()
@@ -1595,7 +1698,9 @@ def test_empty_input_returns_exit_ok_from_clipboard(
     monkeypatch, capsys
 ):
     """An empty clipboard string returns EXIT_OK with empty stdout (clipboard source)."""
-    monkeypatch.setattr(pyperclip, "paste", lambda: "")
+    monkeypatch.setattr(
+        "trac_mcp_server.cli.convert.read_clipboard", lambda: ""
+    )
     exit_code = main(["--from-clipboard", "--to", "md"])
     assert exit_code == EXIT_OK
     assert capsys.readouterr().out == ""

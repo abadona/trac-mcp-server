@@ -13,6 +13,9 @@ verbosity flags (--quiet, --verbose) on top of this skeleton.
 """
 
 import argparse
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -36,6 +39,161 @@ EXIT_RUNTIME_ERROR = 1  # I/O, clipboard, mutual-exclusion
 EXIT_USAGE_ERROR = 2  # argparse default (not raised by us directly)
 EXIT_CONVERSION_ERROR = 3  # exception raised inside convert_text()
 EXIT_TRAC = 4  # Trac client errors (auth, network, protocol) — used by --check-trac and Phases 21-23
+
+
+# ---------------------------------------------------------------------------
+# Clipboard helpers (subprocess fallback for headless terminals)
+# ---------------------------------------------------------------------------
+#
+# pyperclip's built-in detection can fail on Linux terminals where no
+# X11/Wayland clipboard tool is installed AND on remote/container shells
+# where DISPLAY is set but the X socket is unreachable. To recover
+# gracefully we try common command-line clipboard tools directly via
+# subprocess before falling back to pyperclip. This way:
+#
+#   * The user can install wl-clipboard / xclip / xsel and things just
+#     work, even if pyperclip's own detection is unhappy.
+#   * On macOS/Windows (pbcopy/pbpaste, clip.exe), pyperclip still
+#     handles the happy path.
+#   * On total failure we raise a single custom exception whose message
+#     is actionable in headless terminals (mentions --from-file and
+#     stdin as clipboard-free alternatives).
+
+_CLIPBOARD_INSTALL_HINT = (
+    "install a clipboard tool (Linux: wl-clipboard, xclip, or xsel;"
+    " macOS/Windows are handled automatically) or use --from-file PATH"
+    " or pipe input on stdin instead"
+)
+
+
+class ClipboardUnavailableError(RuntimeError):
+    """Raised when no clipboard read/write mechanism can be used.
+
+    Distinct from pyperclip.PyperclipException so the CLI layer can
+    format a single actionable error message regardless of which
+    backend failed.
+    """
+
+
+def _clipboard_read_candidates() -> list[list[str]]:
+    """Return an ordered list of subprocess argv candidates for reading.
+
+    Order of preference:
+      1. wl-paste (Wayland) if WAYLAND_DISPLAY is set
+      2. xclip    (X11)    if DISPLAY is set
+      3. xsel     (X11)    if DISPLAY is set
+      4. pbpaste  (macOS)  unconditional; shutil.which filters
+      5. powershell Get-Clipboard (Windows) unconditional; shutil.which filters
+
+    Each candidate is only kept if its executable is on PATH.
+    """
+    candidates: list[list[str]] = []
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-paste"):
+        candidates.append(["wl-paste", "--no-newline"])
+    if os.environ.get("DISPLAY"):
+        if shutil.which("xclip"):
+            candidates.append(
+                ["xclip", "-selection", "clipboard", "-o"]
+            )
+        if shutil.which("xsel"):
+            candidates.append(["xsel", "--clipboard", "--output"])
+    if shutil.which("pbpaste"):
+        candidates.append(["pbpaste"])
+    if shutil.which("powershell.exe"):
+        candidates.append(
+            ["powershell.exe", "-Command", "Get-Clipboard"]
+        )
+    return candidates
+
+
+def _clipboard_write_candidates() -> list[list[str]]:
+    """Return an ordered list of subprocess argv candidates for writing.
+
+    Same platform ordering as reads. The command reads text from stdin.
+    """
+    candidates: list[list[str]] = []
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        candidates.append(["wl-copy"])
+    if os.environ.get("DISPLAY"):
+        if shutil.which("xclip"):
+            candidates.append(["xclip", "-selection", "clipboard"])
+        if shutil.which("xsel"):
+            candidates.append(["xsel", "--clipboard", "--input"])
+    if shutil.which("pbcopy"):
+        candidates.append(["pbcopy"])
+    if shutil.which("clip.exe"):
+        candidates.append(["clip.exe"])
+    return candidates
+
+
+def read_clipboard() -> str:
+    """Read text from the system clipboard.
+
+    Tries subprocess-based tools first (wl-paste, xclip, xsel, pbpaste,
+    powershell Get-Clipboard) whose availability is discovered via
+    shutil.which and the WAYLAND_DISPLAY / DISPLAY env vars. Falls back
+    to pyperclip.paste() if no subprocess tool is available or all of
+    them fail. Raises ClipboardUnavailableError if everything fails.
+
+    Rationale: pyperclip's own detection sometimes reports "no
+    mechanism" on headless terminals even when a tool is installed;
+    calling the tool directly bypasses that fragility.
+    """
+    errors: list[str] = []
+    for argv in _clipboard_read_candidates():
+        try:
+            completed = subprocess.run(
+                argv, capture_output=True, check=True
+            )
+            return completed.stdout.decode("utf-8", errors="replace")
+        except (
+            subprocess.CalledProcessError,
+            OSError,
+            UnicodeDecodeError,
+        ) as e:
+            errors.append(f"{argv[0]}: {e}")
+
+    # Fallback: pyperclip (macOS/Windows happy path, or if user has a
+    # backend pyperclip knows about that we don't).
+    try:
+        return pyperclip.paste()
+    except pyperclip.PyperclipException as e:
+        errors.append(f"pyperclip: {e}")
+
+    raise ClipboardUnavailableError(
+        "no working clipboard mechanism found; "
+        + _CLIPBOARD_INSTALL_HINT
+        + (f" (attempts: {'; '.join(errors)})" if errors else "")
+    )
+
+
+def write_clipboard(text: str) -> None:
+    """Write text to the system clipboard.
+
+    Symmetric to read_clipboard(). Tries subprocess tools first, then
+    pyperclip.copy(). Raises ClipboardUnavailableError on total
+    failure.
+    """
+    errors: list[str] = []
+    payload = text.encode("utf-8")
+    for argv in _clipboard_write_candidates():
+        try:
+            subprocess.run(argv, input=payload, check=True)
+            return
+        except (subprocess.CalledProcessError, OSError) as e:
+            errors.append(f"{argv[0]}: {e}")
+
+    try:
+        pyperclip.copy(text)
+        return
+    except pyperclip.PyperclipException as e:
+        errors.append(f"pyperclip: {e}")
+
+    raise ClipboardUnavailableError(
+        "no working clipboard mechanism found; "
+        + _CLIPBOARD_INSTALL_HINT
+        + (f" (attempts: {'; '.join(errors)})" if errors else "")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -365,10 +523,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--heading-anchors",
         dest="heading_anchors",
         choices=("on", "off"),
-        default="on",
+        default="off",
         help=(
             "Emit explicit #slug anchors on TracWiki headings"
-            " (md → tracwiki only). Default: on."
+            " (md → tracwiki only). Default: off."
         ),
     )
     parser.add_argument(
@@ -415,13 +573,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--from-file",
+        dest="from_file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Read input from a local file. "
+            "Alternative to the positional FILE argument. "
+            "Mutually exclusive with FILE and --from-clipboard."
+        ),
+    )
+    parser.add_argument(
         "--from-wiki",
         dest="from_wiki",
         default=None,
         metavar="PAGE",
         help=(
             "Fetch input from a Trac wiki page (source format is TracWiki). "
-            "Mutually exclusive with FILE and --from-clipboard."
+            "Mutually exclusive with FILE, --from-file, and --from-clipboard."
         ),
     )
     parser.add_argument(
@@ -479,7 +648,7 @@ def convert_text(
     source_format: str,
     target_format: str,
     *,
-    heading_anchors: bool = True,
+    heading_anchors: bool = False,
     unknown_macros: str = "bracket",
 ) -> ConversionResult:
     """Convert text between Markdown and TracWiki.
@@ -573,6 +742,27 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("trac-convert: --to is required\n")
         return EXIT_USAGE_ERROR
 
+    # --- --from-file mutex validation ---
+    if args.from_file is not None:
+        if args.input_file is not None:
+            sys.stderr.write(
+                "trac-convert: --from-file and FILE are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
+        if args.from_clipboard:
+            sys.stderr.write(
+                "trac-convert: --from-file and --from-clipboard are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
+        if args.from_wiki is not None:
+            sys.stderr.write(
+                "trac-convert: --from-file and --from-wiki are"
+                " mutually exclusive\n"
+            )
+            return EXIT_RUNTIME_ERROR
+
     # --- --from-wiki mutex validation ---
     if args.from_wiki is not None:
         if args.input_file is not None:
@@ -610,6 +800,12 @@ def main(argv: list[str] | None = None) -> int:
             " mutually exclusive\n"
         )
         return EXIT_RUNTIME_ERROR
+    if args.from_clipboard and args.from_file is not None:
+        sys.stderr.write(
+            "trac-convert: --from-clipboard and --from-file are"
+            " mutually exclusive\n"
+        )
+        return EXIT_RUNTIME_ERROR
     if args.to_clipboard and args.output_file is not None:
         sys.stderr.write(
             "trac-convert: --to-clipboard and --output are"
@@ -625,10 +821,22 @@ def main(argv: list[str] | None = None) -> int:
         # --from-wiki authoritatively knows the source is TracWiki;
         # silently override --from (which may still be 'auto' or 'md').
         args.source_format = "tracwiki"
+    elif args.from_file is not None:
+        try:
+            text = Path(args.from_file).read_text(encoding="utf-8")
+        except OSError as e:
+            sys.stderr.write(
+                f"trac-convert: cannot read input file:"
+                f" {args.from_file}: {e.strerror or e}\n"
+            )
+            return EXIT_RUNTIME_ERROR
     elif args.from_clipboard:
         try:
-            text = pyperclip.paste()
-        except pyperclip.PyperclipException as e:
+            text = read_clipboard()
+        except (
+            ClipboardUnavailableError,
+            pyperclip.PyperclipException,
+        ) as e:
             sys.stderr.write(
                 f"trac-convert: clipboard read failed: {e}\n"
             )
@@ -679,8 +887,11 @@ def main(argv: list[str] | None = None) -> int:
             )
     elif args.to_clipboard:
         try:
-            pyperclip.copy(result.text)
-        except pyperclip.PyperclipException as e:
+            write_clipboard(result.text)
+        except (
+            ClipboardUnavailableError,
+            pyperclip.PyperclipException,
+        ) as e:
             sys.stderr.write(
                 f"trac-convert: clipboard write failed: {e}\n"
             )
