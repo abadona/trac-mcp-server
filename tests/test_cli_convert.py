@@ -48,10 +48,12 @@ def test_help_flag_exits_zero_with_usage(capsys):
 
 
 def test_no_args_missing_required_to_exits_2(capsys):
-    """No args now fails argparse required-arg check (--to)."""
-    with pytest.raises(SystemExit) as excinfo:
-        main([])
-    assert excinfo.value.code == 2
+    """No args exits 2 with a --to-is-required message (manual check in main)."""
+    # Since Phase 20 made --to optional in argparse (to allow --check-trac
+    # without --to), the enforcement moved from argparse to main(). main()
+    # returns EXIT_USAGE_ERROR (2), it does NOT raise SystemExit.
+    exit_code = main([])
+    assert exit_code == 2
     captured = capsys.readouterr()
     assert "--to" in captured.err
     assert "required" in captured.err.lower()
@@ -98,9 +100,11 @@ def test_to_flag_rejects_invalid_choice(capsys):
 
 
 def test_to_flag_is_required(capsys):
-    with pytest.raises(SystemExit) as excinfo:
-        build_parser().parse_args(["--from", "md"])
-    assert excinfo.value.code == 2
+    # Since Phase 20 made --to optional at the argparse level (to allow
+    # --check-trac without --to), the requirement is enforced in main()
+    # rather than by argparse.  Test through main() instead of build_parser().
+    exit_code = main(["--from", "md"])
+    assert exit_code == 2
     err = capsys.readouterr().err
     assert "--to" in err
 
