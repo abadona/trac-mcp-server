@@ -130,7 +130,12 @@ async def _handle_search(
                     type="text", text="No tickets found matching query."
                 )
             ],
-            structuredContent={"tickets": [], "total": 0, "showing": 0},
+            structuredContent={
+                "tickets": [],
+                "total": 0,
+                "showing": 0,
+                "failed_ids": [],
+            },
         )
 
     # Limit results
@@ -138,6 +143,8 @@ async def _handle_search(
     ticket_ids = ticket_ids[:max_results]
 
     # Fetch basic info for each ticket in parallel (bounded by semaphore)
+    failed_ids: list[int] = []
+
     async def _fetch_ticket(tid: int) -> dict[str, Any] | None:
         """Fetch a single ticket, returning None on failure."""
         try:
@@ -152,6 +159,7 @@ async def _handle_search(
                 "owner": attrs.get("owner", ""),
             }
         except Exception:
+            failed_ids.append(tid)
             return None
 
     fetched = await gather_limited(
@@ -177,6 +185,14 @@ async def _handle_search(
     response_text = header + "\n" + "\n".join(results)
     if total > max_results:
         response_text += "\n\nUse max_results to see more."
+    if failed_ids:
+        failed_list = ", ".join(f"#{tid}" for tid in failed_ids)
+        response_text += (
+            f"\n\nWarning: failed to load {len(failed_ids)} "
+            f"ticket(s) that matched the search: {failed_list}. "
+            "The counts above do not include them; retry the search "
+            "to try loading them again."
+        )
 
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=response_text)],
@@ -184,6 +200,7 @@ async def _handle_search(
             "tickets": tickets_json,
             "total": total,
             "showing": len(tickets_json),
+            "failed_ids": failed_ids,
         },
     )
 

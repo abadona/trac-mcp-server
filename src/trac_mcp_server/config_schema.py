@@ -63,6 +63,12 @@ class TracConfig(BaseModel):
         le=10000,
         description="Maximum items per batch operation (1-10000)",
     )
+    rpc_timeout: int = Field(
+        default=60,
+        ge=5,
+        le=300,
+        description="Read timeout in seconds for XML-RPC requests (5-300)",
+    )
 
     model_config = {"frozen": True}
 
@@ -192,4 +198,5 @@ def to_legacy_config(
         debug=overrides.get("debug", False) or unified.trac.debug,
         max_parallel_requests=unified.trac.max_parallel_requests,
         max_batch_size=unified.trac.max_batch_size,
+        rpc_timeout=unified.trac.rpc_timeout,
     )

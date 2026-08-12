@@ -1,9 +1,12 @@
+import calendar
+from datetime import datetime
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from trac_mcp_server.config import Config
-from trac_mcp_server.core.client import TracClient
+from trac_mcp_server.core.client import TicketCreateTimeout, TracClient
 from trac_mcp_server.validators import (
     validate_content,
     validate_page_name,
@@ -94,6 +97,36 @@ def test_search_tickets_success(mock_post, mock_config):
     payload = call_args[1]["data"]
     assert "ticket.query" in payload
     assert "status=new&amp;owner=testuser" in payload
+
+    # Default read timeout comes from config.rpc_timeout (60)
+    assert call_args[1]["timeout"] == (10, 60)
+
+
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_rpc_request_uses_configured_rpc_timeout(mock_post):
+    """A custom Config.rpc_timeout is threaded into the request timeout."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.content = b"""<?xml version="1.0"?>
+<methodResponse>
+  <params>
+    <param>
+      <value><string>1.0</string></value>
+    </param>
+  </params>
+</methodResponse>"""
+    mock_post.return_value = mock_response
+
+    config = Config(
+        trac_url="https://trac.example.com/trac",
+        username="testuser",
+        password="testpass",
+        rpc_timeout=120,
+    )
+    client = TracClient(config)
+    client.validate_connection()
+
+    assert mock_post.call_args[1]["timeout"] == (10, 120)
 
 
 @patch("trac_mcp_server.core.client.requests.Session.post")
@@ -289,6 +322,148 @@ def test_create_ticket_with_attributes(mock_post, mock_config):
     assert "core" in payload
     assert "v1.0" in payload
     assert "admin" in payload
+
+
+# Trac returns creation times as compact UTC iso8601 strings; keep the test
+# clock and the fixture timestamps derived from one source so they cannot drift.
+_NOW_STR = "20260812T12:00:00"
+_NOW_EPOCH = calendar.timegm(
+    datetime.strptime(_NOW_STR, "%Y%m%dT%H:%M:%S").timetuple()
+)
+
+
+def _query_response(*ids):
+    values = "".join(f"<value><int>{i}</int></value>" for i in ids)
+    r = Mock()
+    r.status_code = 200
+    r.content = f"""<?xml version="1.0"?>
+<methodResponse><params><param><value><array><data>{values}</data></array></value></param></params></methodResponse>""".encode()
+    return r
+
+
+def _ticket_get_response(tid, summary, created="20260812T12:00:00"):
+    r = Mock()
+    r.status_code = 200
+    r.content = f"""<?xml version="1.0"?>
+<methodResponse>
+  <params>
+    <param>
+      <value>
+        <array>
+          <data>
+            <value><int>{tid}</int></value>
+            <value><string>{created}</string></value>
+            <value><string>{created}</string></value>
+            <value>
+              <struct>
+                <member>
+                  <name>summary</name>
+                  <value><string>{summary}</string></value>
+                </member>
+              </struct>
+            </value>
+          </data>
+        </array>
+      </value>
+    </param>
+  </params>
+</methodResponse>""".encode()
+    return r
+
+
+@patch("trac_mcp_server.core.client.time.time")
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_create_ticket_timeout_reports_not_created(
+    mock_post, mock_time, mock_config
+):
+    """Timeout + no matching ticket afterwards: report that it most likely
+    was not created, and do NOT retry -- ticket.create is not idempotent."""
+    mock_time.return_value = float(_NOW_EPOCH)
+    mock_post.side_effect = [
+        requests.exceptions.ReadTimeout("Read timed out."),
+        _query_response(),
+    ]
+
+    client = TracClient(mock_config)
+
+    with pytest.raises(TicketCreateTimeout) as exc_info:
+        client.create_ticket("Test ticket", "Test description")
+
+    assert exc_info.value.ticket_id is None
+    assert "most likely was not created" in str(exc_info.value)
+    # Crucially: no second ticket.create was issued.
+    assert mock_post.call_count == 2
+    assert "ticket.create" in mock_post.call_args_list[0][1]["data"]
+    assert "ticket.query" in mock_post.call_args_list[1][1]["data"]
+
+
+@patch("trac_mcp_server.core.client.time.time")
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_create_ticket_timeout_reports_ticket_that_landed(
+    mock_post, mock_time, mock_config
+):
+    """Timeout but the ticket did land: report its id so the caller knows
+    not to retry, rather than silently returning it as a normal success."""
+    mock_time.return_value = float(_NOW_EPOCH)
+    mock_post.side_effect = [
+        requests.exceptions.ReadTimeout("Read timed out."),
+        _query_response(10),
+        _ticket_get_response(10, "Test ticket", "20260812T12:00:05"),
+    ]
+
+    client = TracClient(mock_config)
+
+    with pytest.raises(TicketCreateTimeout) as exc_info:
+        client.create_ticket("Test ticket", "Test description")
+
+    assert exc_info.value.ticket_id == 10
+    assert "created anyway as #10" in str(exc_info.value)
+    assert "Do not retry" in str(exc_info.value)
+    assert mock_post.call_count == 3
+
+
+@patch("trac_mcp_server.core.client.time.time")
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_create_ticket_timeout_ignores_older_ticket_with_same_summary(
+    mock_post, mock_time, mock_config
+):
+    """An unrelated older ticket sharing the summary must not be mistaken
+    for this create -- otherwise a real create is silently skipped."""
+    mock_time.return_value = float(_NOW_EPOCH)
+    mock_post.side_effect = [
+        requests.exceptions.ReadTimeout("Read timed out."),
+        _query_response(7),
+        # Same summary, but created a year earlier
+        _ticket_get_response(7, "Test ticket", "20250812T12:00:00"),
+    ]
+
+    client = TracClient(mock_config)
+
+    with pytest.raises(TicketCreateTimeout) as exc_info:
+        client.create_ticket("Test ticket", "Test description")
+
+    assert exc_info.value.ticket_id is None
+    assert "most likely was not created" in str(exc_info.value)
+
+
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_create_ticket_timeout_reraises_when_verification_fails(
+    mock_post, mock_config
+):
+    """If the post-timeout verification search itself fails, don't guess:
+    surface the original timeout rather than risk a duplicate create."""
+    mock_post.side_effect = [
+        requests.exceptions.ReadTimeout("Read timed out."),
+        requests.exceptions.ConnectionError("connection reset"),
+    ]
+
+    client = TracClient(mock_config)
+
+    with pytest.raises(requests.exceptions.ReadTimeout):
+        client.create_ticket("Test ticket", "Test description")
+
+    # No retry create call was made after the failed verification.
+    assert mock_post.call_count == 2
 
 
 def test_create_ticket_empty_summary(mock_config):

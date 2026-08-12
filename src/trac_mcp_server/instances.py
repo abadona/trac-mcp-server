@@ -200,6 +200,7 @@ class InstanceRegistry:
             debug=self._default.debug,
             max_parallel_requests=self._default.max_parallel_requests,
             max_batch_size=self._default.max_batch_size,
+            rpc_timeout=self._default.rpc_timeout,
         )
         validate_config(config)
         return config
