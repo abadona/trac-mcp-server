@@ -1,6 +1,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from trac_mcp_server.config import Config
 from trac_mcp_server.core.client import TracClient
@@ -94,6 +95,36 @@ def test_search_tickets_success(mock_post, mock_config):
     payload = call_args[1]["data"]
     assert "ticket.query" in payload
     assert "status=new&amp;owner=testuser" in payload
+
+    # Default read timeout comes from config.rpc_timeout (60)
+    assert call_args[1]["timeout"] == (10, 60)
+
+
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_rpc_request_uses_configured_rpc_timeout(mock_post):
+    """A custom Config.rpc_timeout is threaded into the request timeout."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.content = b"""<?xml version="1.0"?>
+<methodResponse>
+  <params>
+    <param>
+      <value><string>1.0</string></value>
+    </param>
+  </params>
+</methodResponse>"""
+    mock_post.return_value = mock_response
+
+    config = Config(
+        trac_url="https://trac.example.com/trac",
+        username="testuser",
+        password="testpass",
+        rpc_timeout=120,
+    )
+    client = TracClient(config)
+    client.validate_connection()
+
+    assert mock_post.call_args[1]["timeout"] == (10, 120)
 
 
 @patch("trac_mcp_server.core.client.requests.Session.post")
@@ -289,6 +320,141 @@ def test_create_ticket_with_attributes(mock_post, mock_config):
     assert "core" in payload
     assert "v1.0" in payload
     assert "admin" in payload
+
+
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_create_ticket_retries_after_timeout_when_no_existing_ticket(
+    mock_post, mock_config
+):
+    """A read timeout on ticket.create retries once, after confirming via
+    ticket.query that the create didn't actually land server-side."""
+    empty_query_response = Mock()
+    empty_query_response.status_code = 200
+    empty_query_response.content = b"""<?xml version="1.0"?>
+<methodResponse>
+  <params>
+    <param>
+      <value>
+        <array>
+          <data></data>
+        </array>
+      </value>
+    </param>
+  </params>
+</methodResponse>"""
+
+    create_response = Mock()
+    create_response.status_code = 200
+    create_response.content = b"""<?xml version="1.0"?>
+<methodResponse>
+  <params>
+    <param>
+      <value><int>99</int></value>
+    </param>
+  </params>
+</methodResponse>"""
+
+    mock_post.side_effect = [
+        requests.exceptions.ReadTimeout("Read timed out."),
+        empty_query_response,
+        create_response,
+    ]
+
+    client = TracClient(mock_config)
+    result = client.create_ticket("Test ticket", "Test description")
+
+    assert result == 99
+    assert mock_post.call_count == 3
+    assert "ticket.create" in mock_post.call_args_list[0][1]["data"]
+    assert "ticket.query" in mock_post.call_args_list[1][1]["data"]
+    assert "ticket.create" in mock_post.call_args_list[2][1]["data"]
+
+
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_create_ticket_timeout_finds_existing_ticket_avoids_duplicate(
+    mock_post, mock_config
+):
+    """If ticket.query finds a matching ticket after a timeout, return its
+    ID instead of retrying create and risking a duplicate."""
+    query_response = Mock()
+    query_response.status_code = 200
+    query_response.content = b"""<?xml version="1.0"?>
+<methodResponse>
+  <params>
+    <param>
+      <value>
+        <array>
+          <data>
+            <value><int>10</int></value>
+          </data>
+        </array>
+      </value>
+    </param>
+  </params>
+</methodResponse>"""
+
+    get_response = Mock()
+    get_response.status_code = 200
+    get_response.content = b"""<?xml version="1.0"?>
+<methodResponse>
+  <params>
+    <param>
+      <value>
+        <array>
+          <data>
+            <value><int>10</int></value>
+            <value><int>1234567890</int></value>
+            <value><int>1234567890</int></value>
+            <value>
+              <struct>
+                <member>
+                  <name>summary</name>
+                  <value><string>Test ticket</string></value>
+                </member>
+              </struct>
+            </value>
+          </data>
+        </array>
+      </value>
+    </param>
+  </params>
+</methodResponse>"""
+
+    mock_post.side_effect = [
+        requests.exceptions.ReadTimeout("Read timed out."),
+        query_response,
+        get_response,
+    ]
+
+    client = TracClient(mock_config)
+    result = client.create_ticket("Test ticket", "Test description")
+
+    # Returns the already-created ticket's ID; no second create call.
+    assert result == 10
+    assert mock_post.call_count == 3
+    assert "ticket.create" in mock_post.call_args_list[0][1]["data"]
+    assert "ticket.query" in mock_post.call_args_list[1][1]["data"]
+    assert "ticket.get" in mock_post.call_args_list[2][1]["data"]
+
+
+@patch("trac_mcp_server.core.client.requests.Session.post")
+def test_create_ticket_timeout_reraises_when_verification_fails(
+    mock_post, mock_config
+):
+    """If the post-timeout verification search itself fails, don't guess:
+    surface the original timeout rather than risk a duplicate create."""
+    mock_post.side_effect = [
+        requests.exceptions.ReadTimeout("Read timed out."),
+        requests.exceptions.ConnectionError("connection reset"),
+    ]
+
+    client = TracClient(mock_config)
+
+    with pytest.raises(requests.exceptions.ReadTimeout):
+        client.create_ticket("Test ticket", "Test description")
+
+    # No retry create call was made after the failed verification.
+    assert mock_post.call_count == 2
 
 
 def test_create_ticket_empty_summary(mock_config):

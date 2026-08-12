@@ -382,6 +382,72 @@ class TestLoadConfig:
         config = load_config()
         assert config.max_parallel_requests == 100
 
+    # --- rpc_timeout env var parsing ---
+
+    def test_rpc_timeout_from_env(self, monkeypatch):
+        monkeypatch.setenv("TRAC_URL", "https://trac.example.com")
+        monkeypatch.setenv("TRAC_USERNAME", "user")
+        monkeypatch.setenv("TRAC_PASSWORD", "pass")
+        monkeypatch.setenv("TRAC_RPC_TIMEOUT", "120")
+
+        config = load_config()
+        assert config.rpc_timeout == 120
+
+    def test_rpc_timeout_default(self, monkeypatch):
+        monkeypatch.setenv("TRAC_URL", "https://trac.example.com")
+        monkeypatch.setenv("TRAC_USERNAME", "user")
+        monkeypatch.setenv("TRAC_PASSWORD", "pass")
+        monkeypatch.delenv("TRAC_RPC_TIMEOUT", raising=False)
+
+        config = load_config()
+        assert config.rpc_timeout == 60
+
+    def test_rpc_timeout_non_numeric(self, monkeypatch):
+        """Non-numeric TRAC_RPC_TIMEOUT should raise ValueError with clear message."""
+        monkeypatch.setenv("TRAC_URL", "https://trac.example.com")
+        monkeypatch.setenv("TRAC_USERNAME", "user")
+        monkeypatch.setenv("TRAC_PASSWORD", "pass")
+        monkeypatch.setenv("TRAC_RPC_TIMEOUT", "abc")
+
+        with pytest.raises(
+            ValueError, match="Invalid TRAC_RPC_TIMEOUT 'abc'"
+        ):
+            load_config()
+
+    def test_rpc_timeout_too_low(self, monkeypatch):
+        """TRAC_RPC_TIMEOUT=1 should raise (must be >= 5)."""
+        monkeypatch.setenv("TRAC_URL", "https://trac.example.com")
+        monkeypatch.setenv("TRAC_USERNAME", "user")
+        monkeypatch.setenv("TRAC_PASSWORD", "pass")
+        monkeypatch.setenv("TRAC_RPC_TIMEOUT", "1")
+
+        with pytest.raises(
+            ValueError, match="must be a number between 5 and 300"
+        ):
+            load_config()
+
+    def test_rpc_timeout_too_high(self, monkeypatch):
+        """TRAC_RPC_TIMEOUT=500 should raise (must be <= 300)."""
+        monkeypatch.setenv("TRAC_URL", "https://trac.example.com")
+        monkeypatch.setenv("TRAC_USERNAME", "user")
+        monkeypatch.setenv("TRAC_PASSWORD", "pass")
+        monkeypatch.setenv("TRAC_RPC_TIMEOUT", "500")
+
+        with pytest.raises(
+            ValueError, match="must be a number between 5 and 300"
+        ):
+            load_config()
+
+    def test_rpc_timeout_yaml_fallback(self, monkeypatch):
+        """rpc_timeout uses YAML fallback when env var unset."""
+        monkeypatch.setenv("TRAC_URL", "https://trac.example.com")
+        monkeypatch.setenv("TRAC_USERNAME", "user")
+        monkeypatch.setenv("TRAC_PASSWORD", "pass")
+        monkeypatch.delenv("TRAC_RPC_TIMEOUT", raising=False)
+
+        config = load_config(yaml_fallbacks={"rpc_timeout": 90})
+        assert config.rpc_timeout == 90
+
     # --- Whitespace stripping in load_config ---
 
     def test_url_whitespace_stripped(self, monkeypatch):

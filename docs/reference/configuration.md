@@ -32,6 +32,7 @@ trac:
   debug: false
   max_parallel_requests: 5
   max_batch_size: 500
+  rpc_timeout: 60
 
 logging:
   level: INFO

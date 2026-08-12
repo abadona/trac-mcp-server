@@ -51,7 +51,7 @@ class TracClient:
             self.rpc_url,
             data=payload,
             headers=headers,
-            timeout=(10, 60),
+            timeout=(10, self.config.rpc_timeout),
         )
         response.raise_for_status()
 
@@ -181,6 +181,16 @@ class TracClient:
         Raises:
             ValueError: If summary or description is empty
             xmlrpc.client.Fault: If server validation fails or permissions denied
+            requests.exceptions.Timeout: If the create times out and it
+                could not be confirmed whether the ticket was actually
+                created (see retry behavior below).
+
+        On a read timeout (config.rpc_timeout, default 60s), the create
+        may have actually succeeded server-side. Before retrying, this
+        checks the reporter's most recent tickets for one matching
+        ``summary`` and returns its ID instead of creating a duplicate.
+        If that check itself fails, the original timeout is re-raised
+        rather than retrying blindly.
         """
         # Validate required fields
         if not summary or not summary.strip():
@@ -197,10 +207,63 @@ class TracClient:
         attrs: dict[str, Any] = attributes.copy() if attributes else {}
         attrs["type"] = ticket_type
 
-        result = self._rpc_request(
-            "ticket", "create", summary, description, attrs, notify
+        try:
+            result = self._rpc_request(
+                "ticket", "create", summary, description, attrs, notify
+            )
+            return int(result)
+        except requests.exceptions.Timeout as timeout_err:
+            # The request may have actually reached Trac and created the
+            # ticket despite the client-side read timeout (e.g. a slow
+            # server under load converting a long description). Verify
+            # before retrying so a transient timeout doesn't produce a
+            # duplicate ticket.
+            reporter = attrs.get("reporter", self.config.username)
+            try:
+                existing_id = self._find_recently_created_ticket(
+                    summary, reporter
+                )
+            except Exception:
+                # Couldn't determine whether the ticket already exists --
+                # retrying a non-idempotent create blindly risks a
+                # duplicate, so surface the original timeout instead.
+                raise timeout_err from None
+            if existing_id is not None:
+                return existing_id
+            result = self._rpc_request(
+                "ticket", "create", summary, description, attrs, notify
+            )
+            return int(result)
+
+    def _find_recently_created_ticket(
+        self, summary: str, reporter: str
+    ) -> int | None:
+        """
+        Look for a ticket matching ``summary`` among ``reporter``'s most
+        recent tickets, to check whether a timed-out create actually
+        landed server-side before retrying it.
+
+        Returns the matching ticket ID, or None once the search has come
+        back and confirmed no match exists among the recent tickets.
+        Lets exceptions from the search itself propagate -- callers
+        should treat "couldn't verify" differently from "verified, no
+        match" since retrying without verification risks a duplicate.
+        """
+        ticket_ids = self._rpc_request(
+            "ticket",
+            "query",
+            f"reporter={reporter}&order=id&desc=1&max=5",
         )
-        return int(result)
+
+        for tid in ticket_ids:
+            try:
+                ticket_data = self._rpc_request("ticket", "get", tid)
+            except Exception:
+                continue
+            attrs = ticket_data[3]
+            if attrs.get("summary") == summary:
+                return int(tid)
+        return None
 
     def update_ticket(
         self,

@@ -13,6 +13,7 @@ Environment variables:
     TRAC_INSECURE: Skip SSL verification (optional, default: false)
     TRAC_MAX_PARALLEL_REQUESTS: Max parallel XML-RPC requests (optional, default: 5)
     TRAC_MAX_BATCH_SIZE: Max items per batch operation (optional, default: 500)
+    TRAC_RPC_TIMEOUT: Read timeout in seconds for XML-RPC requests (optional, default: 60)
 """
 
 import logging
@@ -32,6 +33,7 @@ class Config:
     debug: bool = False
     max_parallel_requests: int = 5
     max_batch_size: int = 500
+    rpc_timeout: int = 60
 
 
 def validate_config(config: Config) -> None:
@@ -204,6 +206,23 @@ def load_config(
     else:
         final_max_batch = 500
 
+    rpc_timeout_raw = os.getenv("TRAC_RPC_TIMEOUT")
+    if rpc_timeout_raw is not None:
+        try:
+            final_rpc_timeout = int(rpc_timeout_raw)
+        except ValueError:
+            raise ValueError(
+                f"Invalid TRAC_RPC_TIMEOUT '{rpc_timeout_raw}': must be a number between 5 and 300"
+            ) from None
+        if not (5 <= final_rpc_timeout <= 300):
+            raise ValueError(
+                f"Invalid TRAC_RPC_TIMEOUT '{rpc_timeout_raw}': must be a number between 5 and 300"
+            )
+    elif "rpc_timeout" in fb:
+        final_rpc_timeout = int(fb["rpc_timeout"])
+    else:
+        final_rpc_timeout = 60
+
     config = Config(
         trac_url=trac_url,
         username=trac_username,
@@ -212,6 +231,7 @@ def load_config(
         debug=final_debug,
         max_parallel_requests=final_max_parallel,
         max_batch_size=final_max_batch,
+        rpc_timeout=final_rpc_timeout,
     )
 
     validate_config(config)
