@@ -12,7 +12,7 @@ import mcp.types as types
 
 from ...converters import markdown_to_tracwiki
 from ...core.async_utils import run_sync
-from ...core.client import TracClient
+from ...core.client import TicketCreateTimeout, TracClient
 from .constants import DEFAULT_TICKET_TYPE, TICKET_TYPE_LIST
 from .errors import build_error_response
 from .registry import ToolSpec
@@ -208,13 +208,33 @@ async def _handle_create(
         attributes["keywords"] = args["keywords"]
 
     # Create ticket
-    ticket_id = await run_sync(
-        client.create_ticket,
-        summary,
-        description_tracwiki,
-        ticket_type,
-        attributes,
-    )
+    try:
+        ticket_id = await run_sync(
+            client.create_ticket,
+            summary,
+            description_tracwiki,
+            ticket_type,
+            attributes,
+        )
+    except TicketCreateTimeout as e:
+        # The create timed out but we know what happened to it. The generic
+        # handler would say "retry later", which is exactly wrong when the
+        # ticket already landed, so answer specifically.
+        if e.ticket_id is not None:
+            return build_error_response(
+                "timeout_ticket_created",
+                str(e),
+                f"Do NOT retry -- that would create a duplicate. "
+                f"Use ticket_get(ticket_id={e.ticket_id}) to confirm the "
+                f"ticket, and ticket_update to correct it if needed.",
+            )
+        return build_error_response(
+            "timeout_not_created",
+            str(e),
+            "Retrying ticket_create is most likely safe. To be certain "
+            "first, use ticket_search to check whether a ticket with this "
+            "summary already exists.",
+        )
 
     return types.CallToolResult(
         content=[

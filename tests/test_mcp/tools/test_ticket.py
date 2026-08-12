@@ -10,7 +10,7 @@ import mcp.types as types
 
 from trac_mcp_server.config import Config
 from trac_mcp_server.converters.common import ConversionResult
-from trac_mcp_server.core.client import TracClient
+from trac_mcp_server.core.client import TicketCreateTimeout, TracClient
 from trac_mcp_server.mcp.tools import TICKET_TOOLS
 from trac_mcp_server.mcp.tools.registry import ToolRegistry
 from trac_mcp_server.mcp.tools.ticket_read import (
@@ -455,6 +455,72 @@ class TestHandleTicketCreate(unittest.TestCase):
             self.assertIn(
                 "Error (server_error)", result.content[0].text
             )
+
+    def test_create_timeout_ticket_landed_tells_caller_not_to_retry(
+        self,
+    ):
+        """When the create timed out but landed, the agent must be told the
+        id and told NOT to retry -- the generic 'retry later' advice would
+        produce a duplicate ticket."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_convert.return_value = "Converted"
+            mock_run_sync.side_effect = TicketCreateTimeout(
+                "timed out, but the ticket was created anyway as #77.",
+                ticket_id=77,
+            )
+
+            registry = ToolRegistry(TICKET_WRITE_SPECS)
+            result = asyncio.run(
+                registry.call_tool(
+                    "ticket_create",
+                    {"summary": "Test", "description": "Test desc"},
+                    self.mock_client,
+                )
+            )
+
+            text = result.content[0].text
+            self.assertTrue(result.isError)
+            self.assertIn("timeout_ticket_created", text)
+            self.assertIn("#77", text)
+            self.assertIn("Do NOT retry", text)
+            self.assertNotIn("retry later", text)
+
+    def test_create_timeout_not_created_says_retry_is_safe(self):
+        """When the create timed out and did not land, say so."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_convert.return_value = "Converted"
+            mock_run_sync.side_effect = TicketCreateTimeout(
+                "timed out and no matching ticket was found afterwards.",
+                ticket_id=None,
+            )
+
+            registry = ToolRegistry(TICKET_WRITE_SPECS)
+            result = asyncio.run(
+                registry.call_tool(
+                    "ticket_create",
+                    {"summary": "Test", "description": "Test desc"},
+                    self.mock_client,
+                )
+            )
+
+            text = result.content[0].text
+            self.assertTrue(result.isError)
+            self.assertIn("timeout_not_created", text)
+            self.assertIn("most likely safe", text)
 
     def test_create_permission_denied(self):
         """Permission denied fault returns permission_denied error."""

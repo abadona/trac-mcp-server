@@ -1,6 +1,9 @@
 import base64
+import calendar
 import threading
+import time
 import xmlrpc.client
+from datetime import datetime
 from typing import Any
 from xml.etree import ElementTree
 
@@ -8,6 +11,25 @@ import requests
 
 from ..config import Config
 from ..validators import validate_content, validate_page_name
+
+
+class TicketCreateTimeout(Exception):
+    """A ticket.create timed out, and we determined what happened to it.
+
+    ``ticket_id`` is the id of the ticket if it was created despite the
+    timeout, or None if no matching ticket could be found (so the create
+    most likely did not land).
+
+    Raised instead of retrying automatically: ticket.create is not
+    idempotent, so an automatic retry can duplicate a ticket, and
+    automatically returning a summary-matched ticket can silently skip a
+    create the caller expected. Reporting what happened lets the caller
+    decide, which is the check they would otherwise hand-roll.
+    """
+
+    def __init__(self, message: str, ticket_id: int | None = None):
+        super().__init__(message)
+        self.ticket_id = ticket_id
 
 
 class TracClient:
@@ -181,16 +203,16 @@ class TracClient:
         Raises:
             ValueError: If summary or description is empty
             xmlrpc.client.Fault: If server validation fails or permissions denied
-            requests.exceptions.Timeout: If the create times out and it
-                could not be confirmed whether the ticket was actually
-                created (see retry behavior below).
+            TicketCreateTimeout: If the create timed out and we could
+                establish whether the ticket landed. ``ticket_id`` says
+                which: set if it was created anyway, None if it was not.
+            requests.exceptions.Timeout: If the create timed out and that
+                check could not be completed, so nothing is known.
 
-        On a read timeout (config.rpc_timeout, default 60s), the create
-        may have actually succeeded server-side. Before retrying, this
-        checks the reporter's most recent tickets for one matching
-        ``summary`` and returns its ID instead of creating a duplicate.
-        If that check itself fails, the original timeout is re-raised
-        rather than retrying blindly.
+        On a read timeout (config.rpc_timeout, default 60s) the create may
+        still have succeeded server-side. This checks whether it did and
+        reports the answer; it deliberately does NOT retry, because
+        ticket.create is not idempotent -- see TicketCreateTimeout.
         """
         # Validate required fields
         if not summary or not summary.strip():
@@ -207,62 +229,105 @@ class TracClient:
         attrs: dict[str, Any] = attributes.copy() if attributes else {}
         attrs["type"] = ticket_type
 
+        sent_at = time.time()
         try:
             result = self._rpc_request(
                 "ticket", "create", summary, description, attrs, notify
             )
             return int(result)
         except requests.exceptions.Timeout as timeout_err:
-            # The request may have actually reached Trac and created the
-            # ticket despite the client-side read timeout (e.g. a slow
-            # server under load converting a long description). Verify
-            # before retrying so a transient timeout doesn't produce a
-            # duplicate ticket.
+            # The request may have reached Trac and created the ticket
+            # despite the client-side read timeout. Find out which, and
+            # tell the caller -- do not act on it here.
             reporter = attrs.get("reporter", self.config.username)
             try:
                 existing_id = self._find_recently_created_ticket(
-                    summary, reporter
+                    summary, reporter, sent_at
                 )
             except Exception:
-                # Couldn't determine whether the ticket already exists --
-                # retrying a non-idempotent create blindly risks a
-                # duplicate, so surface the original timeout instead.
+                # Nothing is known about the outcome. Surface the original
+                # timeout rather than implying either answer.
                 raise timeout_err from None
+
             if existing_id is not None:
-                return existing_id
-            result = self._rpc_request(
-                "ticket", "create", summary, description, attrs, notify
-            )
-            return int(result)
+                raise TicketCreateTimeout(
+                    f"ticket.create timed out after "
+                    f"{self.config.rpc_timeout}s, but the ticket was "
+                    f"created anyway as #{existing_id}. Do not retry; "
+                    f"read #{existing_id} to confirm its contents.",
+                    ticket_id=existing_id,
+                ) from timeout_err
+
+            raise TicketCreateTimeout(
+                f"ticket.create timed out after {self.config.rpc_timeout}s "
+                "and no ticket matching this summary was found afterwards, "
+                "so it most likely was not created. Retrying is probably "
+                "safe. If several tickets share this summary, or many were "
+                "created concurrently, confirm with a search first.",
+                ticket_id=None,
+            ) from timeout_err
+
+    # How far back a post-timeout match is considered plausible. Generous
+    # enough to absorb the timeout itself plus client/server clock skew.
+    _CREATE_MATCH_WINDOW_SECONDS = 600
 
     def _find_recently_created_ticket(
-        self, summary: str, reporter: str
+        self, summary: str, reporter: str, sent_at: float
     ) -> int | None:
         """
-        Look for a ticket matching ``summary`` among ``reporter``'s most
-        recent tickets, to check whether a timed-out create actually
-        landed server-side before retrying it.
+        Look for a ticket matching ``summary`` among ``reporter``'s recent
+        tickets, to establish whether a timed-out create actually landed.
 
-        Returns the matching ticket ID, or None once the search has come
-        back and confirmed no match exists among the recent tickets.
-        Lets exceptions from the search itself propagate -- callers
-        should treat "couldn't verify" differently from "verified, no
-        match" since retrying without verification risks a duplicate.
+        Only tickets created at or after ``sent_at`` (minus a skew
+        allowance) count as a match, so an unrelated older ticket that
+        happens to share the summary is not mistaken for this one.
+
+        Returns the matching ticket id, or None if the search completed
+        and found no plausible match. Exceptions from the search itself
+        propagate: "could not check" and "checked, nothing there" lead to
+        different messages and must not be conflated.
         """
         ticket_ids = self._rpc_request(
             "ticket",
             "query",
-            f"reporter={reporter}&order=id&desc=1&max=5",
+            f"reporter={reporter}&order=id&desc=1&max=20",
         )
 
+        cutoff = sent_at - self._CREATE_MATCH_WINDOW_SECONDS
         for tid in ticket_ids:
             try:
                 ticket_data = self._rpc_request("ticket", "get", tid)
             except Exception:
                 continue
             attrs = ticket_data[3]
-            if attrs.get("summary") == summary:
+            if attrs.get("summary") != summary:
+                continue
+            created = self._parse_trac_time(ticket_data[1])
+            # Unparseable timestamp: keep the match rather than claim the
+            # ticket was not created, which would invite a duplicate.
+            if created is None or created >= cutoff:
                 return int(tid)
+        return None
+
+    @staticmethod
+    def _parse_trac_time(value: Any) -> float | None:
+        """Convert a Trac timestamp to a UTC epoch, or None if unrecognised.
+
+        Trac's XML-RPC layer returns compact iso8601 strings such as
+        "20260812T07:46:13" (UTC, no separators, no offset), and older
+        setups may return an xmlrpc DateTime.
+        """
+        if isinstance(value, xmlrpc.client.DateTime):
+            value = str(value)
+        if not isinstance(value, str):
+            return None
+        for fmt in ("%Y%m%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return calendar.timegm(
+                    datetime.strptime(value, fmt).timetuple()
+                )
+            except ValueError:
+                continue
         return None
 
     def update_ticket(
