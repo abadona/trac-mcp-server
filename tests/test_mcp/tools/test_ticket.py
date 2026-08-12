@@ -1265,6 +1265,57 @@ class TestHandleTicketSearch:
             # Verify gather_limited was called
             mock_gather.assert_called_once()
 
+    def test_search_partial_fetch_failure_reports_failed_ids(self):
+        """A ticket that fails to fetch is excluded but explained, not silently dropped.
+
+        Reproduces the ticket_search total/showing mismatch from ticket #22:
+        total=2, showing=1 with no indication a fetch failed.
+        """
+        client = MagicMock(spec=TracClient)
+
+        def _get_ticket_side_effect(tid):
+            if tid == 15:
+                raise xmlrpc.client.Fault(500, "temporary failure")
+            return [
+                tid,
+                "20260101T00:00:00",
+                "20260101T00:00:00",
+                {
+                    "summary": f"Ticket {tid}",
+                    "status": "new",
+                    "owner": "alice",
+                },
+            ]
+
+        async def _fake_run_sync_limited(func, *args, **kwargs):
+            return _get_ticket_side_effect(*args, **kwargs)
+
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync_limited",
+                side_effect=_fake_run_sync_limited,
+            ),
+        ):
+            mock_run_sync.return_value = [10, 15]
+
+            result = self._run(_handle_search(client, {}))
+
+            assert isinstance(result, types.CallToolResult)
+            assert result.structuredContent["total"] == 2
+            assert result.structuredContent["showing"] == 1
+            assert result.structuredContent["failed_ids"] == [15]
+            assert "#10" in result.content[0].text
+            assert (
+                "#15" not in result.content[0].text.split("Warning")[0]
+            )
+            assert (
+                "failed to load 1 ticket(s)" in result.content[0].text
+            )
+            assert "#15" in result.content[0].text
+
     def test_search_xmlrpc_fault(self):
         """XML-RPC fault during search produces structured error."""
         client = MagicMock(spec=TracClient)
