@@ -1,9 +1,10 @@
-"""MCP Server for Trac integration using stdio transport.
+"""MCP Server for Trac integration.
 
 This module implements the Model Context Protocol server that enables
 AI agents to interact with Trac via standardized tools and resources.
 
-Transport: stdio (for Claude Desktop/Code integration)
+Transport: stdio (default, for Claude Desktop/Code integration) or
+streamable HTTP (``--transport http``, for shared/remote deployments).
 Protocol: JSON-RPC 2.0 over MCP
 
 Note: Resources capability enables wiki page access via MCP resource protocol.
@@ -22,6 +23,7 @@ from mcp.server.models import InitializationOptions
 from pydantic_core import Url
 
 from .. import __version__
+from ..config_bootstrap import bootstrap_server_config
 from ..core.async_utils import run_sync
 from ..core.client import TracClient
 from ..instances import (
@@ -31,6 +33,7 @@ from ..instances import (
 )
 from ..logger import setup_logging
 from ..version import check_version_consistency
+from .http_app import run_http
 from .lifespan import server_lifespan
 from .resources.wiki import (
     handle_list_wiki_resources,
@@ -48,7 +51,7 @@ from .tools.registry import ToolSpec, with_instance_param
 logger = logging.getLogger(__name__)
 
 # Initialize server instance
-server = Server("trac-mcp-server")
+server = Server("trac-mcp-server", version=__version__)
 
 # Global instance registry (initialized in lifespan)
 _instances: InstanceRegistry | None = None
@@ -279,24 +282,36 @@ async def handle_call_tool(
 
 
 async def main(config_overrides: dict | None = None):
-    """Run the MCP server with stdio transport.
+    """Run the MCP server with the configured transport.
 
-    This function sets up logging for MCP mode (file only, never stdout),
-    validates Trac connection via lifespan manager, and starts the server
-    with stdio transport for JSON-RPC communication.
+    Resolves the server (transport) config, sets up logging appropriately
+    for that transport, validates Trac connection via lifespan manager, and
+    starts serving -- stdio (default) or streamable HTTP.
 
     Args:
-        config_overrides: Optional dict with config values to override (url, username, password, insecure, log_file)
+        config_overrides: Optional dict with config values to override (url,
+            username, password, insecure, log_file, transport, host, port,
+            path, allow_unauthenticated)
     """
     # Extract log file override if provided
     log_file = (
         config_overrides.get("log_file") if config_overrides else None
     )
 
-    # Setup logging for MCP mode (file only, never stdout)
+    try:
+        server_config = bootstrap_server_config(config_overrides)
+    except ValueError as e:
+        sys.stderr.write(f"ERROR: Server configuration error: {e}\n")
+        raise RuntimeError(f"Server configuration error: {e}") from e
+
+    # Setup logging: MCP mode for stdio (file only, never stdout, since
+    # stdio_server() uses stdout for JSON-RPC); stderr+file for http.
     # CRITICAL: This must be called BEFORE stdio_server context
     # to prevent any stdout contamination during protocol negotiation
-    setup_logging(mode="mcp", log_file=log_file)
+    setup_logging(
+        mode="mcp" if server_config.transport == "stdio" else "http",
+        log_file=log_file,
+    )
 
     # Version check (non-blocking warning for stale binaries)
     is_consistent, message = check_version_consistency()
@@ -357,29 +372,35 @@ async def main(config_overrides: dict | None = None):
         set_instances(ctx["instances"])
         set_instance_registry(ctx["instances"])
         try:
-            async with mcp.server.stdio.stdio_server() as (
-                read_stream,
-                write_stream,
-            ):
-                init_options = InitializationOptions(
-                    server_name="trac-mcp-server",
-                    server_version=__version__,
-                    capabilities=server.get_capabilities(
-                        notification_options=NotificationOptions(),
-                        experimental_capabilities={},
-                    ),
-                )
-                await server.run(
-                    read_stream, write_stream, init_options
-                )
+            if server_config.transport == "stdio":
+                await _run_stdio()
+            else:
+                await run_http(server, server_config)
         finally:
             set_instances(None)
             set_instance_registry(None)
             set_registry(None)
 
 
-def run() -> None:
-    """Entry point that handles errors gracefully and parses CLI arguments."""
+async def _run_stdio() -> None:
+    """Serve the MCP protocol over stdio JSON-RPC."""
+    async with mcp.server.stdio.stdio_server() as (
+        read_stream,
+        write_stream,
+    ):
+        init_options = InitializationOptions(
+            server_name="trac-mcp-server",
+            server_version=__version__,
+            capabilities=server.get_capabilities(
+                notification_options=NotificationOptions(),
+                experimental_capabilities={},
+            ),
+        )
+        await server.run(read_stream, write_stream, init_options)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the ``trac-mcp-server`` CLI argument parser."""
     parser = argparse.ArgumentParser(
         description="Trac MCP Server - Model Context Protocol server for Trac integration",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -403,8 +424,12 @@ Examples:
   # Restrict tools by Trac permissions
   trac-mcp-server --permissions-file /etc/trac-mcp/read-only.permissions
 
-Note: This server uses stdio transport for JSON-RPC communication with MCP clients.
-All user-facing messages are written to stderr. Do not pipe stdin/stdout manually.
+  # Serve over streamable HTTP instead of stdio
+  TRAC_MCP_AUTH_TOKEN=devtoken trac-mcp-server --transport http --port 8080
+
+Note: The default stdio transport uses stdout for JSON-RPC communication with
+MCP clients -- all user-facing messages are written to stderr, and stdin/stdout
+must not be piped manually. This does not apply to --transport http.
         """,
     )
 
@@ -438,12 +463,44 @@ All user-facing messages are written to stderr. Do not pipe stdin/stdout manuall
         "If not specified, all tools are available.",
     )
     parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        help="MCP transport to serve (default: stdio; also settable via "
+        "TRAC_MCP_TRANSPORT env var or config.yaml server.transport)",
+    )
+    parser.add_argument(
+        "--host",
+        help="Bind host for --transport http (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        help="Bind port for --transport http (default: 8080)",
+    )
+    parser.add_argument(
+        "--path",
+        help="URL path the MCP endpoint is mounted at for --transport http "
+        "(default: /mcp)",
+    )
+    parser.add_argument(
+        "--allow-unauthenticated",
+        action="store_true",
+        help="Allow --transport http to bind a non-loopback host without an "
+        "auth token. Dangerous -- exposes Trac credentials to the network. "
+        "Prefer setting TRAC_MCP_AUTH_TOKEN instead.",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"trac-mcp-server version {__version__}",
     )
 
-    args = parser.parse_args()
+    return parser
+
+
+def run() -> None:
+    """Entry point that handles errors gracefully and parses CLI arguments."""
+    args = build_parser().parse_args()
 
     # Build config overrides dict from CLI args
     config_overrides = {}
@@ -459,6 +516,16 @@ All user-facing messages are written to stderr. Do not pipe stdin/stdout manuall
         config_overrides["log_file"] = args.log_file
     if args.permissions_file:
         config_overrides["permissions_file"] = args.permissions_file
+    if args.transport:
+        config_overrides["transport"] = args.transport
+    if args.host:
+        config_overrides["host"] = args.host
+    if args.port is not None:
+        config_overrides["port"] = args.port
+    if args.path:
+        config_overrides["path"] = args.path
+    if args.allow_unauthenticated:
+        config_overrides["allow_unauthenticated"] = True
 
     # Log config overrides to stderr (before stdio transport starts)
     if config_overrides:

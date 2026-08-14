@@ -135,11 +135,12 @@ class InstanceRegistry:
 
     def _reload_if_changed(self) -> None:
         """Pick up edits to the instances file without a server restart."""
-        current = self._snapshot_mtimes()
-        if current != self._mtimes:
-            self._declared = load_declared_instances()
-            self._sources = _instance_source_paths()
-            self._mtimes = self._snapshot_mtimes()
+        with self._lock:
+            current = self._snapshot_mtimes()
+            if current != self._mtimes:
+                self._declared = load_declared_instances()
+                self._sources = _instance_source_paths()
+                self._mtimes = self._snapshot_mtimes()
 
     def _configured_names(self) -> str:
         return ", ".join(["default"] + sorted(self._declared))
