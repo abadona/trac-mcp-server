@@ -9,7 +9,13 @@ import logging
 
 import pytest
 
-from trac_mcp_server.config import Config, load_config, validate_config
+from trac_mcp_server.config import (
+    Config,
+    load_config,
+    validate_config,
+    validate_server_config,
+)
+from trac_mcp_server.config_schema import ServerConfig
 
 # -------------------------------------------------------------------------
 # validate_config()
@@ -169,6 +175,59 @@ class TestValidateConfig:
         ):
             validate_config(config)
         assert "SSL verification disabled" not in caplog.text
+
+
+# -------------------------------------------------------------------------
+# validate_server_config()
+# -------------------------------------------------------------------------
+
+
+class TestValidateServerConfig:
+    """Tests for validate_server_config() -- the http bind-safety guard."""
+
+    def test_stdio_transport_never_raises(self):
+        """stdio transport is exempt regardless of host/auth."""
+        config = ServerConfig(transport="stdio", host="0.0.0.0")
+        validate_server_config(config)  # should not raise
+
+    def test_http_loopback_no_token_allowed(self):
+        """http on a loopback host is fine without a token."""
+        config = ServerConfig(transport="http", host="127.0.0.1")
+        validate_server_config(config)  # should not raise
+
+    def test_http_localhost_no_token_allowed(self):
+        """'localhost' counts as loopback."""
+        config = ServerConfig(transport="http", host="localhost")
+        validate_server_config(config)  # should not raise
+
+    def test_http_ipv6_loopback_no_token_allowed(self):
+        """'::1' counts as loopback."""
+        config = ServerConfig(transport="http", host="::1")
+        validate_server_config(config)  # should not raise
+
+    def test_http_non_loopback_no_token_raises(self):
+        """Non-loopback host with no auth_token and no opt-out raises."""
+        config = ServerConfig(transport="http", host="0.0.0.0")
+        with pytest.raises(
+            ValueError, match="Refusing to bind non-loopback host"
+        ):
+            validate_server_config(config)
+
+    def test_http_non_loopback_with_token_allowed(self):
+        """A configured auth_token permits a non-loopback bind."""
+        config = ServerConfig(
+            transport="http", host="0.0.0.0", auth_token="secret"
+        )
+        validate_server_config(config)  # should not raise
+
+    def test_http_non_loopback_with_allow_unauthenticated_allowed(self):
+        """allow_unauthenticated=True permits a non-loopback bind."""
+        config = ServerConfig(
+            transport="http",
+            host="0.0.0.0",
+            allow_unauthenticated=True,
+        )
+        validate_server_config(config)  # should not raise
 
 
 # -------------------------------------------------------------------------

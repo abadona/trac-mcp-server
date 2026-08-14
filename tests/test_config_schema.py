@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from trac_mcp_server.config_schema import (
     InstanceConfig,
     LoggingConfig,
+    ServerConfig,
     TracConfig,
     UnifiedConfig,
     build_config,
@@ -33,6 +34,8 @@ class TestUnifiedConfig:
         assert config.trac.insecure is False
         assert config.logging is not None
         assert config.logging.level == "INFO"
+        assert config.server is not None
+        assert config.server.transport == "stdio"
 
     def test_full_config_with_all_sections(self):
         """Full config with all sections parses correctly."""
@@ -108,6 +111,66 @@ class TestTracConfig:
         config = TracConfig(url="https://trac.example.com")
         with pytest.raises(ValidationError):
             config.url = "https://changed.example.com"
+
+
+# ---------------------------------------------------------------------------
+# ServerConfig tests
+# ---------------------------------------------------------------------------
+
+
+class TestServerConfig:
+    """Tests for ServerConfig section model."""
+
+    def test_defaults(self):
+        """Defaults are stdio transport, loopback host, port 8080, /mcp path."""
+        config = ServerConfig()
+        assert config.transport == "stdio"
+        assert config.host == "127.0.0.1"
+        assert config.port == 8080
+        assert config.path == "/mcp"
+        assert config.auth_token is None
+        assert config.allow_unauthenticated is False
+        assert config.allowed_hosts == []
+        assert config.allowed_origins == []
+
+    def test_transport_rejects_invalid_value(self):
+        """transport only accepts 'stdio' or 'http'."""
+        with pytest.raises(ValidationError):
+            ServerConfig(transport="sse")  # type: ignore[arg-type]
+
+    def test_port_out_of_range_rejected(self):
+        """port must be between 1 and 65535."""
+        with pytest.raises(ValidationError):
+            ServerConfig(port=0)
+        with pytest.raises(ValidationError):
+            ServerConfig(port=65536)
+
+    def test_custom_values_accepted(self):
+        """Custom values round-trip through the model."""
+        config = ServerConfig(
+            transport="http",
+            host="0.0.0.0",
+            port=9090,
+            path="/api/mcp",
+            auth_token="secret",
+            allow_unauthenticated=True,
+            allowed_hosts=["example.com:*"],
+            allowed_origins=["https://example.com"],
+        )
+        assert config.transport == "http"
+        assert config.host == "0.0.0.0"
+        assert config.port == 9090
+        assert config.path == "/api/mcp"
+        assert config.auth_token == "secret"
+        assert config.allow_unauthenticated is True
+        assert config.allowed_hosts == ["example.com:*"]
+        assert config.allowed_origins == ["https://example.com"]
+
+    def test_frozen_model(self):
+        """ServerConfig is frozen (immutable)."""
+        config = ServerConfig()
+        with pytest.raises(ValidationError):
+            config.port = 9999
 
 
 # ---------------------------------------------------------------------------
