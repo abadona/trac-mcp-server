@@ -14,6 +14,7 @@ For quick start and installation, see the [README](../../README.md).
 | MCP Resources | [mcp-resources.md](mcp-resources.md) | Wiki page resources via URI templates |
 | CLI Reference | [cli.md](cli.md) | Command-line interface documentation |
 | Configuration | [configuration.md](configuration.md) | Config sources, file format, environment variables |
+| HTTP Transport | [http-transport.md](http-transport.md) | Streamable HTTP transport: endpoints, auth, bind safety, reverse proxies |
 | Error Handling | [error-handling.md](error-handling.md) | Error types, response format, corrective actions |
 | Format Conversion | [format-conversion.md](format-conversion.md) | Markdown to/from TracWiki conversion rules and mappings |
 | Troubleshooting | [troubleshooting.md](troubleshooting.md) | Common errors, solutions, debug mode |

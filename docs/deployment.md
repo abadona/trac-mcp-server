@@ -89,6 +89,8 @@ trac-mcp-server supports three configuration sources: CLI flags, environment var
 | `TRAC_MAX_BATCH_SIZE` | No | `500` | Max items per batch operation (1-10000) |
 | `TRAC_RPC_TIMEOUT` | No | `60` | Read timeout in seconds for XML-RPC requests (5-300) |
 
+Transport/bind settings (`TRAC_MCP_TRANSPORT`, `TRAC_MCP_HOST`, `TRAC_MCP_PORT`, `TRAC_MCP_AUTH_TOKEN`, ...) are covered separately -- see [HTTP Deployment](#http-deployment) below and [HTTP Transport Reference](reference/http-transport.md).
+
 ### Config File
 
 You can also configure trac-mcp-server with a YAML config file at `.trac_mcp/config.yml` in the working directory:
@@ -255,7 +257,43 @@ Any MCP client that supports stdio transport can launch `trac-mcp-server`:
 }
 ```
 
-The server reads JSON-RPC requests from stdin and writes responses to stdout. No network ports or sockets are needed.
+By default the server reads JSON-RPC requests from stdin and writes responses to stdout -- no network ports or sockets are needed. For a shared or remote deployment instead, see [HTTP Deployment](#http-deployment) below.
+
+---
+
+## HTTP Deployment
+
+For a long-lived process shared by multiple clients or sessions (a daemon, a container, or a remote deployment behind a reverse proxy), run `trac-mcp-server` with `--transport http` instead of the stdio default. Full auth, bind-safety, and reverse-proxy guidance lives in [HTTP Transport Reference](reference/http-transport.md); this section covers the deployment-shaped basics.
+
+### Quick Start
+
+```bash
+TRAC_MCP_AUTH_TOKEN=$(openssl rand -hex 32) \
+  trac-mcp-server --transport http --host 127.0.0.1 --port 8080
+```
+
+By default the server binds `127.0.0.1` only. Binding a non-loopback host (e.g. `0.0.0.0`, for a container or remote box) requires `TRAC_MCP_AUTH_TOKEN` (or `server.auth_token` in `config.yaml`) to be set -- the server refuses to start otherwise, unless you explicitly pass `--allow-unauthenticated` (not recommended; it exposes the operator's Trac credentials to the network).
+
+### Health Check
+
+`GET /healthz` is unauthenticated and returns `{"status": "ok"}` -- use it for container liveness/readiness probes and load-balancer health checks.
+
+```bash
+curl -s http://127.0.0.1:8080/healthz
+```
+
+### Client Configuration
+
+MCP clients that support the streamable HTTP transport connect with the endpoint URL and, if configured, an `Authorization: Bearer <token>` header:
+
+```bash
+claude mcp add --transport http trac http://127.0.0.1:8080/mcp \
+  --header "Authorization: Bearer $TRAC_MCP_AUTH_TOKEN"
+```
+
+### Containers and Reverse Proxies
+
+Running behind a reverse proxy (nginx, Caddy, an ingress controller) for TLS termination is the recommended way to expose the server beyond loopback -- terminate TLS at the proxy and keep `trac-mcp-server` itself bound to `127.0.0.1`. See [HTTP Transport Reference](reference/http-transport.md) for `allowed_hosts`/`allowed_origins` configuration when the proxy changes the `Host` header the server sees.
 
 ---
 
