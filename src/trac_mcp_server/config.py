@@ -16,10 +16,15 @@ Environment variables:
     TRAC_RPC_TIMEOUT: Read timeout in seconds for XML-RPC requests (optional, default: 60)
 """
 
+import ipaddress
 import logging
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from .config_schema import ServerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +81,48 @@ def validate_config(config: Config) -> None:
         logger.warning(
             "WARNING: SSL verification disabled (insecure=True). Use only for development."
         )
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return True if ``host`` only ever resolves to the local machine."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_server_config(server_config: "ServerConfig") -> None:
+    """Validate MCP server (transport) configuration.
+
+    Refuses to bind a non-loopback host for the http transport unless an
+    auth token is configured or the operator explicitly opts out --
+    otherwise "add HTTP" silently becomes "expose the operator's Trac
+    credentials to the network".
+
+    Args:
+        server_config: ServerConfig instance to validate.
+
+    Raises:
+        ValueError: If an unauthenticated http transport would bind a
+            non-loopback host.
+    """
+    if server_config.transport != "http":
+        return
+
+    if server_config.auth_token or server_config.allow_unauthenticated:
+        return
+
+    if _is_loopback_host(server_config.host):
+        return
+
+    raise ValueError(
+        f"Refusing to bind non-loopback host '{server_config.host}' for the "
+        "http transport without authentication. Set TRAC_MCP_AUTH_TOKEN "
+        "(or the server.auth_token config value), or pass "
+        "--allow-unauthenticated to explicitly opt out."
+    )
 
 
 def load_config(

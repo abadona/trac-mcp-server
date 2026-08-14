@@ -7,6 +7,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- Streamable HTTP transport (Trac #26): `trac-mcp-server --transport http` serves MCP over `POST/GET/DELETE <path>` (default `/mcp`) via a Starlette app run by `uvicorn`, alongside the unchanged stdio default
+  - Stateful sessions (`Mcp-Session-Id`, the MCP SDK default), so one long-lived process can serve multiple concurrent clients/sessions
+  - Optional static bearer token auth (`TRAC_MCP_AUTH_TOKEN` / `server.auth_token`), checked with `secrets.compare_digest`; unauthenticated requests get `401` + `WWW-Authenticate: Bearer`
+  - Bind-safety guard: refuses to bind a non-loopback host for `--transport http` unless a token is configured or `--allow-unauthenticated` is explicitly passed
+  - DNS-rebinding protection via the MCP SDK's `TransportSecuritySettings` (`Host`/`Origin` allow-listing, extensible via `server.allowed_hosts`/`allowed_origins`)
+  - Unauthenticated `GET /healthz` for container liveness/readiness probes
+  - New `--transport`, `--host`, `--port`, `--path`, `--allow-unauthenticated` CLI flags and `TRAC_MCP_TRANSPORT`/`TRAC_MCP_HOST`/`TRAC_MCP_PORT`/`TRAC_MCP_PATH`/`TRAC_MCP_AUTH_TOKEN` env vars, plus a new `server:` YAML config section — no `--auth-token` CLI flag by design (would leak into the process list)
+  - New `src/trac_mcp_server/mcp/http_app.py`: `BearerAuthMiddleware`, `build_http_app()`, `run_http()`
+  - `Server("trac-mcp-server", version=__version__)` now reports the project version over HTTP too (previously only the stdio path set this, so `StreamableHTTPSessionManager`'s auto-generated init options would have reported the `mcp` SDK version)
+  - New docs: [HTTP Transport Reference](docs/reference/http-transport.md); updated README, CLI, configuration, and deployment docs
 - Multi-instance Trac support (Trac #18): every MCP tool and the `trac://wiki/*` resource now accept an optional `instance` argument that routes the call to another Trac project instead of the default one, with no server restart required
   - Named instances declared via a new `instances:` section in config files, or an out-of-band `TRAC_INSTANCES` file (YAML/JSON), with live reload on edit
   - Ad-hoc addressing (`instance: "/project-path"`) reaches any project on the same Trac host as the default instance using the default's credentials, restricted to the default instance's exact scheme+host so credentials can never be sent to another host

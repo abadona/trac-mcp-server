@@ -44,8 +44,12 @@ Configuration via environment variables, `.env` file, or YAML config file (`.tra
 | `TRAC_MAX_PARALLEL_REQUESTS` | No | `5` | Max parallel XML-RPC requests |
 | `TRAC_MAX_BATCH_SIZE` | No | `500` | Max items per batch operation (1-10000) |
 | `TRAC_RPC_TIMEOUT` | No | `60` | Read timeout in seconds for XML-RPC requests (5-300) |
+| `TRAC_MCP_TRANSPORT` | No | `stdio` | MCP transport: `stdio` or `http` |
+| `TRAC_MCP_HOST` | No | `127.0.0.1` | Bind host for the `http` transport |
+| `TRAC_MCP_PORT` | No | `8080` | Bind port for the `http` transport |
+| `TRAC_MCP_AUTH_TOKEN` | No | -- | Bearer token required by the `http` transport |
 
-For YAML config file format and advanced options, see [Configuration Reference](docs/reference/configuration.md).
+For YAML config file format and advanced options, see [Configuration Reference](docs/reference/configuration.md). For the `http` transport specifically, see [HTTP Transport](docs/reference/http-transport.md).
 
 ## MCP Client Integration
 
@@ -80,6 +84,14 @@ claude mcp add trac -e TRAC_URL=https://trac.example.com \
 ### Other MCP Clients
 
 Any MCP client that supports stdio transport can launch `trac-mcp-server` as a subprocess. Pass Trac credentials via environment variables.
+
+For a shared or remote deployment, `trac-mcp-server` can also serve MCP over streamable HTTP instead of stdio:
+
+```bash
+TRAC_MCP_AUTH_TOKEN=your-token trac-mcp-server --transport http --port 8080
+```
+
+See [HTTP Transport](docs/reference/http-transport.md) for auth, bind-safety rules, and reverse-proxy guidance.
 
 ## Format Conversion CLI
 

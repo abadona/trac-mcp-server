@@ -8,16 +8,17 @@ call this helper to resolve the layered config precedence without duplicating
 logic.
 """
 
+import os
 from typing import Any
 
 from dotenv import load_dotenv
 
-from .config import Config, load_config
+from .config import Config, load_config, validate_server_config
 from .config_loader import (
     discover_config_files,
     load_hierarchical_config,
 )
-from .config_schema import build_config
+from .config_schema import ServerConfig, build_config
 
 
 def bootstrap_config(
@@ -99,3 +100,114 @@ def bootstrap_config(
     sources.append("environment variables")
 
     return config, sources
+
+
+def bootstrap_server_config(
+    cli_overrides: dict[str, Any] | None = None,
+) -> ServerConfig:
+    """Load MCP server (transport) configuration.
+
+    Mirrors ``bootstrap_config()``'s bootstrap sequence -- ``.env``, then
+    the YAML ``server:`` section as fallbacks -- but resolves the process
+    settings that govern *how the server is exposed* (transport, bind
+    address, auth) rather than how it talks to Trac. Precedence per field:
+    CLI > env var (``TRAC_MCP_*``) > YAML ``server:`` section > default.
+
+    Accepted ``cli_overrides`` keys: ``transport``, ``host``, ``port``,
+    ``path``, ``allow_unauthenticated``. ``auth_token`` is intentionally
+    not accepted here -- it must come from ``TRAC_MCP_AUTH_TOKEN`` or the
+    YAML ``server:`` section, never a CLI flag, so it never appears in the
+    process list.
+
+    Args:
+        cli_overrides: Optional dict with CLI-sourced values.
+
+    Returns:
+        A validated :class:`~trac_mcp_server.config_schema.ServerConfig`.
+
+    Raises:
+        ValueError: If a numeric override is out of range, ``transport``
+            is neither ``stdio`` nor ``http``, or an unauthenticated http
+            transport would bind a non-loopback host.
+    """
+    load_dotenv()
+
+    yaml_server: dict[str, Any] = {}
+    config_files = discover_config_files()
+    if config_files:
+        raw = load_hierarchical_config()
+        unified = build_config(raw)
+        yaml_server = {
+            k: v
+            for k, v in unified.server.model_dump().items()
+            if v is not None
+        }
+
+    overrides = cli_overrides or {}
+
+    transport = (
+        overrides.get("transport")
+        or os.getenv("TRAC_MCP_TRANSPORT")
+        or yaml_server.get("transport", "stdio")
+    )
+    if transport not in ("stdio", "http"):
+        raise ValueError(
+            f"Invalid transport '{transport}': must be 'stdio' or 'http'"
+        )
+
+    host = (
+        overrides.get("host")
+        or os.getenv("TRAC_MCP_HOST")
+        or yaml_server.get("host", "127.0.0.1")
+    )
+    path = (
+        overrides.get("path")
+        or os.getenv("TRAC_MCP_PATH")
+        or yaml_server.get("path", "/mcp")
+    )
+
+    port_override = overrides.get("port")
+    port_raw = (
+        port_override
+        if port_override is not None
+        else os.getenv("TRAC_MCP_PORT")
+    )
+    if port_raw is not None:
+        try:
+            port = int(port_raw)
+        except ValueError:
+            raise ValueError(
+                f"Invalid port '{port_raw}': must be a number between 1 and 65535"
+            ) from None
+        if not (1 <= port <= 65535):
+            raise ValueError(
+                f"Invalid port '{port_raw}': must be a number between 1 and 65535"
+            )
+    else:
+        port = int(yaml_server.get("port", 8080))
+
+    auth_token = os.getenv("TRAC_MCP_AUTH_TOKEN") or yaml_server.get(
+        "auth_token"
+    )
+
+    allow_unauthenticated = bool(
+        overrides.get("allow_unauthenticated", False)
+    ) or bool(yaml_server.get("allow_unauthenticated", False))
+
+    allowed_hosts = list(yaml_server.get("allowed_hosts", []))
+    allowed_origins = list(yaml_server.get("allowed_origins", []))
+
+    server_config = ServerConfig(
+        transport=transport,
+        host=host,
+        port=port,
+        path=path,
+        auth_token=auth_token,
+        allow_unauthenticated=allow_unauthenticated,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+    validate_server_config(server_config)
+
+    return server_config

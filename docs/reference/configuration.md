@@ -37,9 +37,19 @@ trac:
 logging:
   level: INFO
   file: /tmp/trac-mcp-server.log
+
+server:
+  transport: stdio       # or "http"
+  host: 127.0.0.1
+  port: 8080
+  path: /mcp
+  auth_token: ${TRAC_MCP_AUTH_TOKEN}
+  allow_unauthenticated: false
+  allowed_hosts: []
+  allowed_origins: []
 ```
 
-All fields are optional. Omitted fields use built-in defaults or can be supplied via environment variables.
+All fields are optional. Omitted fields use built-in defaults or can be supplied via environment variables. `server:` settings govern the MCP server *process itself* (transport, bind address, auth), not the Trac connection -- see [HTTP Transport](http-transport.md) for the full field reference and bind-safety rules.
 
 ### Environment Variable Interpolation
 
@@ -98,8 +108,23 @@ Environment variables override config file values. They are always checked, even
 | `TRAC_DEBUG` | No | `false` | Enable debug logging |
 | `TRAC_MAX_PARALLEL_REQUESTS` | No | `5` | Maximum parallel XML-RPC requests to Trac |
 | `TRAC_MAX_BATCH_SIZE` | No | `500` | Maximum items per batch ticket operation (1-10000) |
+| `TRAC_RPC_TIMEOUT` | No | `60` | Read timeout in seconds for XML-RPC requests (5-300) |
 
 Boolean variables (`TRAC_INSECURE`, `TRAC_DEBUG`) accept `true`, `1`, `yes`, or `on` (case-insensitive). Any other value is treated as `false`.
+
+### Server (Transport) Environment Variables
+
+These govern the MCP server process itself -- transport, bind address, and auth -- not the Trac connection. Same precedence rules apply: CLI flag > env var > YAML `server:` section > default.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRAC_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `http` |
+| `TRAC_MCP_HOST` | `127.0.0.1` | Bind host for the `http` transport |
+| `TRAC_MCP_PORT` | `8080` | Bind port for the `http` transport (1-65535) |
+| `TRAC_MCP_PATH` | `/mcp` | URL path the MCP endpoint is mounted at |
+| `TRAC_MCP_AUTH_TOKEN` | -- | Bearer token required by the `http` transport. Env/YAML only -- there is no CLI flag, to keep it out of the process list. |
+
+See [HTTP Transport](http-transport.md) for the full picture, including the bind-safety rule that refuses an unauthenticated non-loopback bind.
 
 **Note:** Environment variables always take precedence over config file values, whether or not a config file is present. The `${VAR}` interpolation syntax in YAML is a convenience for referencing env vars within config files, but is not required -- env vars are checked directly during configuration loading and override any config file value for the same setting.
 

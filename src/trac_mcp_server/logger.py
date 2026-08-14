@@ -42,7 +42,9 @@ def setup_logging(
     Configure logging based on execution mode.
 
     Args:
-        mode: "mcp" for file logging (never stdout), "cli" for stderr logging.
+        mode: "mcp" for file logging (never stdout, required for stdio
+            transport); "cli" or "http" for stderr logging (with an
+            optional companion log file).
         debug: If True, overrides LOG_LEVEL to DEBUG.
         log_file: Custom log file path (overrides LOG_FILE env var).
         debug_format: "text" (default) or "json" for structured output.
@@ -121,3 +123,5 @@ def setup_logging(
         logging.getLogger("urllib3").setLevel(logging.WARNING)
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("uvicorn").setLevel(logging.WARNING)
+        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

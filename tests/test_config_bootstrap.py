@@ -5,7 +5,10 @@ from unittest.mock import patch
 
 import pytest
 
-from trac_mcp_server.config_bootstrap import bootstrap_config
+from trac_mcp_server.config_bootstrap import (
+    bootstrap_config,
+    bootstrap_server_config,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -243,3 +246,209 @@ def test_helper_does_not_write_to_stderr_or_stdout(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+# ---------------------------------------------------------------------------
+# bootstrap_server_config() tests
+# ---------------------------------------------------------------------------
+
+
+def _clear_server_env(monkeypatch):
+    """Remove all TRAC_MCP_* server env vars so no fallback is available."""
+    for var in (
+        "TRAC_MCP_TRANSPORT",
+        "TRAC_MCP_HOST",
+        "TRAC_MCP_PORT",
+        "TRAC_MCP_PATH",
+        "TRAC_MCP_AUTH_TOKEN",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_server_config_defaults_with_no_sources(monkeypatch):
+    """No CLI/env/YAML -> ServerConfig defaults (stdio, 127.0.0.1, 8080, /mcp)."""
+    _clear_server_env(monkeypatch)
+
+    with (
+        patch("trac_mcp_server.config_bootstrap.load_dotenv"),
+        patch(
+            "trac_mcp_server.config_bootstrap.discover_config_files",
+            return_value=[],
+        ),
+    ):
+        server_config = bootstrap_server_config(None)
+
+    assert server_config.transport == "stdio"
+    assert server_config.host == "127.0.0.1"
+    assert server_config.port == 8080
+    assert server_config.path == "/mcp"
+    assert server_config.auth_token is None
+
+
+def test_env_vars_populate_server_config(monkeypatch):
+    """TRAC_MCP_* env vars populate ServerConfig fields."""
+    _clear_server_env(monkeypatch)
+    monkeypatch.setenv("TRAC_MCP_TRANSPORT", "http")
+    monkeypatch.setenv("TRAC_MCP_HOST", "0.0.0.0")
+    monkeypatch.setenv("TRAC_MCP_PORT", "9090")
+    monkeypatch.setenv("TRAC_MCP_PATH", "/api/mcp")
+    monkeypatch.setenv("TRAC_MCP_AUTH_TOKEN", "envtoken")
+
+    with (
+        patch("trac_mcp_server.config_bootstrap.load_dotenv"),
+        patch(
+            "trac_mcp_server.config_bootstrap.discover_config_files",
+            return_value=[],
+        ),
+    ):
+        server_config = bootstrap_server_config(None)
+
+    assert server_config.transport == "http"
+    assert server_config.host == "0.0.0.0"
+    assert server_config.port == 9090
+    assert server_config.path == "/api/mcp"
+    assert server_config.auth_token == "envtoken"
+
+
+def test_cli_overrides_win_over_env_for_server_config(monkeypatch):
+    """CLI overrides take precedence over TRAC_MCP_* env vars."""
+    _clear_server_env(monkeypatch)
+    monkeypatch.setenv("TRAC_MCP_TRANSPORT", "stdio")
+    monkeypatch.setenv("TRAC_MCP_HOST", "0.0.0.0")
+    monkeypatch.setenv("TRAC_MCP_PORT", "1111")
+
+    with (
+        patch("trac_mcp_server.config_bootstrap.load_dotenv"),
+        patch(
+            "trac_mcp_server.config_bootstrap.discover_config_files",
+            return_value=[],
+        ),
+    ):
+        server_config = bootstrap_server_config(
+            {
+                "transport": "http",
+                "host": "127.0.0.1",
+                "port": 9999,
+                "allow_unauthenticated": True,
+            }
+        )
+
+    assert server_config.transport == "http"
+    assert server_config.host == "127.0.0.1"
+    assert server_config.port == 9999
+    assert server_config.allow_unauthenticated is True
+
+
+def test_yaml_server_section_used_as_fallback(monkeypatch):
+    """YAML server: section values are used when CLI/env are unset."""
+    _clear_server_env(monkeypatch)
+
+    with (
+        patch("trac_mcp_server.config_bootstrap.load_dotenv"),
+        patch(
+            "trac_mcp_server.config_bootstrap.discover_config_files",
+            return_value=["/fake/config.yaml"],
+        ),
+        patch(
+            "trac_mcp_server.config_bootstrap.load_hierarchical_config",
+            return_value={
+                "server": {
+                    "transport": "http",
+                    "host": "127.0.0.1",
+                    "port": 8765,
+                    "path": "/mcp",
+                }
+            },
+        ),
+    ):
+        server_config = bootstrap_server_config(None)
+
+    assert server_config.transport == "http"
+    assert server_config.port == 8765
+
+
+def test_auth_token_not_accepted_from_cli_overrides(monkeypatch):
+    """auth_token is intentionally not a recognized cli_overrides key --
+    it must come from TRAC_MCP_AUTH_TOKEN or YAML, never the CLI, so it
+    never appears in the process list."""
+    _clear_server_env(monkeypatch)
+
+    with (
+        patch("trac_mcp_server.config_bootstrap.load_dotenv"),
+        patch(
+            "trac_mcp_server.config_bootstrap.discover_config_files",
+            return_value=[],
+        ),
+    ):
+        server_config = bootstrap_server_config(
+            {"auth_token": "should-be-ignored"}
+        )
+
+    assert server_config.auth_token is None
+
+
+def test_invalid_transport_raises(monkeypatch):
+    """An unrecognized transport value raises ValueError."""
+    _clear_server_env(monkeypatch)
+    monkeypatch.setenv("TRAC_MCP_TRANSPORT", "sse")
+
+    with (
+        patch("trac_mcp_server.config_bootstrap.load_dotenv"),
+        patch(
+            "trac_mcp_server.config_bootstrap.discover_config_files",
+            return_value=[],
+        ),
+    ):
+        with pytest.raises(ValueError, match="Invalid transport"):
+            bootstrap_server_config(None)
+
+
+def test_invalid_port_raises(monkeypatch):
+    """A non-numeric TRAC_MCP_PORT raises ValueError."""
+    _clear_server_env(monkeypatch)
+    monkeypatch.setenv("TRAC_MCP_PORT", "not-a-number")
+
+    with (
+        patch("trac_mcp_server.config_bootstrap.load_dotenv"),
+        patch(
+            "trac_mcp_server.config_bootstrap.discover_config_files",
+            return_value=[],
+        ),
+    ):
+        with pytest.raises(ValueError, match="Invalid port"):
+            bootstrap_server_config(None)
+
+
+def test_out_of_range_port_raises(monkeypatch):
+    """An out-of-range TRAC_MCP_PORT raises ValueError."""
+    _clear_server_env(monkeypatch)
+    monkeypatch.setenv("TRAC_MCP_PORT", "99999")
+
+    with (
+        patch("trac_mcp_server.config_bootstrap.load_dotenv"),
+        patch(
+            "trac_mcp_server.config_bootstrap.discover_config_files",
+            return_value=[],
+        ),
+    ):
+        with pytest.raises(ValueError, match="Invalid port"):
+            bootstrap_server_config(None)
+
+
+def test_http_non_loopback_no_token_raises(monkeypatch):
+    """Bind-safety validation runs at the end of bootstrap_server_config()."""
+    _clear_server_env(monkeypatch)
+
+    with (
+        patch("trac_mcp_server.config_bootstrap.load_dotenv"),
+        patch(
+            "trac_mcp_server.config_bootstrap.discover_config_files",
+            return_value=[],
+        ),
+    ):
+        with pytest.raises(
+            ValueError, match="Refusing to bind non-loopback host"
+        ):
+            bootstrap_server_config(
+                {"transport": "http", "host": "0.0.0.0"}
+            )

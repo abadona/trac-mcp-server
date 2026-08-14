@@ -214,9 +214,10 @@
 - Priority: Medium -- affects user experience on misconfiguration.
 
 **No tests for `mcp/server.py` main() and run() functions:**
-- What's not tested: CLI argument parsing, config override building, stdio transport setup, version display.
-- Files: `src/trac_mcp_server/mcp/server.py:199-353`
-- Risk: CLI regressions (e.g., broken --version, wrong default for --log-file).
+- What's not tested: `run()`'s config-overrides dict building and the `main()`/`_run_stdio()` orchestration itself (stdio transport startup, lifespan wiring).
+- CLI argument parsing (including the http-transport flags) and version display are now covered by `tests/test_mcp/test_server_cli.py`, via the extracted `build_parser()`.
+- Files: `src/trac_mcp_server/mcp/server.py`
+- Risk: CLI regressions in the config-overrides building step (e.g., a new flag silently not wired into `config_overrides`).
 - Priority: Low -- end-to-end behavior, hard to unit test.
 
 **No tests for `converters/common.py` `auto_convert()` function:**

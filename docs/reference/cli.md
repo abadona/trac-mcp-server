@@ -9,6 +9,7 @@ The `trac-mcp-server` command starts the MCP server. It communicates via stdin/s
 ```bash
 trac-mcp-server
 trac-mcp-server --version
+trac-mcp-server --transport http --port 8080   # streamable HTTP instead of stdio
 ```
 
 ### Options
@@ -21,7 +22,14 @@ trac-mcp-server --version
 | `--insecure` | `false` | Skip SSL certificate verification (development only) |
 | `--log-file PATH` | `/tmp/trac-mcp-server.log` | Log file location |
 | `--permissions-file PATH` | -- | Restrict available tools by Trac permissions (see [Tool Architecture](tool-architecture.md#permission-filtering)) |
+| `--transport {stdio,http}` | `stdio` | MCP transport to serve (also settable via `TRAC_MCP_TRANSPORT` or `config.yaml` `server.transport`) |
+| `--host HOST` | `127.0.0.1` | Bind host for `--transport http` |
+| `--port PORT` | `8080` | Bind port for `--transport http` |
+| `--path PATH` | `/mcp` | URL path the MCP endpoint is mounted at, for `--transport http` |
+| `--allow-unauthenticated` | `false` | Allow `--transport http` to bind a non-loopback host without an auth token. Dangerous -- exposes Trac credentials to the network. Prefer `TRAC_MCP_AUTH_TOKEN`. |
 | `--version` | -- | Show version and exit |
+
+There is no `--auth-token` flag: it would leak the secret into the process list. Set it via `TRAC_MCP_AUTH_TOKEN` or `config.yaml`'s `server.auth_token`. See [HTTP Transport](http-transport.md) for the full auth and bind-safety rules.
 
 ### Configuration
 
@@ -29,13 +37,15 @@ Configuration can come from YAML config files, environment variables, or CLI fla
 
 ### How It Works
 
-The server runs over stdio transport: it reads JSON-RPC requests from stdin and writes responses to stdout. All log output goes to a file (never stdout), so the stdio channel stays clean for MCP protocol messages.
+By default the server runs over stdio transport: it reads JSON-RPC requests from stdin and writes responses to stdout. All log output goes to a file (never stdout), so the stdio channel stays clean for MCP protocol messages.
 
 Typical lifecycle:
 
 1. MCP client launches `trac-mcp-server` as a subprocess
 2. Server validates Trac connection on startup
 3. Server handles MCP tool calls (tickets, wiki, milestones, etc.) until the client disconnects
+
+With `--transport http`, the server instead serves MCP over streamable HTTP (`POST/GET/DELETE` on the configured path) via `uvicorn`, so one long-lived process can serve multiple clients/sessions. See [HTTP Transport](http-transport.md).
 
 ### Installation
 

@@ -17,7 +17,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
@@ -99,6 +99,50 @@ class InstanceConfig(BaseModel):
     model_config = {"frozen": True}
 
 
+class ServerConfig(BaseModel):
+    """MCP server process settings: transport, bind address, and auth.
+
+    Distinct from ``TracConfig`` -- these govern how the server process
+    itself is exposed to clients, not how it talks to Trac.
+    """
+
+    transport: Literal["stdio", "http"] = Field(
+        default="stdio", description="MCP transport to serve"
+    )
+    host: str = Field(
+        default="127.0.0.1",
+        description="Bind host for the http transport",
+    )
+    port: int = Field(
+        default=8080,
+        ge=1,
+        le=65535,
+        description="Bind port for the http transport (1-65535)",
+    )
+    path: str = Field(
+        default="/mcp",
+        description="URL path the MCP endpoint is mounted at",
+    )
+    auth_token: str | None = Field(
+        default=None,
+        description="Static bearer token required for http transport requests",
+    )
+    allow_unauthenticated: bool = Field(
+        default=False,
+        description="Allow binding a non-loopback host without an auth_token",
+    )
+    allowed_hosts: list[str] = Field(
+        default_factory=list,
+        description="Extra Host header values to accept, beyond the loopback/host:port defaults",
+    )
+    allowed_origins: list[str] = Field(
+        default_factory=list,
+        description="Extra Origin header values to accept for DNS-rebinding protection",
+    )
+
+    model_config = {"frozen": True}
+
+
 class LoggingConfig(BaseModel):
     """Logging configuration.
 
@@ -126,6 +170,7 @@ class UnifiedConfig(BaseModel):
     """
 
     trac: TracConfig = Field(default_factory=TracConfig)
+    server: ServerConfig = Field(default_factory=ServerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     instances: dict[str, InstanceConfig] = Field(default_factory=dict)
 

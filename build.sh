@@ -53,6 +53,7 @@ HIDDEN_IMPORTS=(
     # mcp/ subpackage
     trac_mcp_server.mcp
     trac_mcp_server.mcp.server
+    trac_mcp_server.mcp.http_app
     trac_mcp_server.mcp.lifespan
     trac_mcp_server.mcp.tools
     trac_mcp_server.mcp.tools.errors
@@ -77,6 +78,9 @@ HIDDEN_IMPORTS=(
     mcp.server
     mcp.server.stdio
     mcp.server.models
+    mcp.server.streamable_http
+    mcp.server.streamable_http_manager
+    mcp.server.transport_security
     mcp.types
     pydantic
     pydantic_core
@@ -84,6 +88,14 @@ HIDDEN_IMPORTS=(
     anyio
     dotenv
     merge3
+    starlette
+    sse_starlette
+    uvicorn
+    uvicorn.loops.auto
+    uvicorn.protocols.http.auto
+    uvicorn.protocols.http.h11_impl
+    uvicorn.protocols.websockets.auto
+    uvicorn.lifespan.on
 )
 
 # Extra hidden imports for trac-convert (clipboard support)
