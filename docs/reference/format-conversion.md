@@ -98,6 +98,40 @@ Markdown:  **bold** and *italic*
 TracWiki:  '''bold''' and ''italic''
 ```
 
+**Line breaks:**
+```
+Markdown:  substrate:trac␣␣
+           next line
+
+TracWiki:  substrate:trac [[BR]]
+           next line
+```
+
+> **Note:** A hard line break (`text` followed by two trailing spaces, `␣␣`
+> above) always converts to `[[BR]]` with a leading space when the
+> preceding character isn't already whitespace. Trac's wiki-link grammar
+> treats a colon-valued token (`substrate:trac`, `toolchain:x`, ...)
+> immediately followed by `[[BR]]` as a candidate `wikiname:target`
+> TracLink, greedily consuming `[[BR]]` into the failed link-target parse
+> instead of recognizing it as the line-break macro -- the leading space
+> avoids the collision (ticket #29).
+
+**Tables:**
+```
+Markdown:  | | Clip lead | Ground spring |
+           |---|---|---|
+           | 5 V undershoot | -2.40 V | -0.56 V |
+
+TracWiki:  || ||=Clip lead=||=Ground spring=||
+           ||5 V undershoot||-2.40 V||-0.56 V||
+```
+
+> **Note:** An empty cell (a table's usual shape for a row-label column)
+> renders as a lone space, not a bare `||`. Two adjacent `||` with nothing
+> between them (`||||`) is TracWiki's colspan-2 marker, not two separate
+> empty cells -- using it for a genuinely empty cell would merge it into
+> its neighbor and shift every following column left by one (ticket #20).
+
 **Code Blocks:**
 ```
 Markdown:  ```python
@@ -153,6 +187,40 @@ TracWiki:   * Item 1
             * Item 2
               * Nested
 ```
+
+**Macros:**
+```
+Markdown:  [MACRO: PageOutline]
+TracWiki:  [[PageOutline]]
+
+Markdown:  [MACRO: TOC(depth=2)]
+TracWiki:  [[TOC(depth=2)]]
+
+Markdown:  [[SomePage]]
+TracWiki:  [[SomePage]]
+```
+
+> **Note:** `[MACRO: Name(args)]` -- the placeholder `tracwiki_to_markdown`
+> emits for a macro it couldn't otherwise represent in Markdown -- converts
+> back to `[[Name(args)]]`, so a `wiki_get` -> edit -> `wiki_update` round
+> trip no longer permanently flattens the macro (ticket #19). `[[...]]`
+> syntax typed directly in the Markdown source passes through unchanged too.
+
+**CamelCase words:**
+```
+Markdown:  WiFi credentials live in .env.
+TracWiki:  !WiFi credentials live in .env.
+```
+
+> **Note:** Trac's WikiFormatting auto-links any CamelCase-shaped word
+> (two or more capitalized "humps", e.g. `WiFi`, `LoRa`, `PageOutline`) into
+> a page-reference attempt, which renders as a broken missing-page link if
+> the page doesn't exist. Markdown has no such auto-link concept, so any
+> CamelCase-shaped word reaching plain prose is defensively prefixed with
+> `!` -- Trac's own escape character -- so it renders as literal text
+> (ticket #27). This does not apply inside code spans/blocks, inside a
+> link's own display text (a TracWiki link label is never re-parsed for
+> WikiFormatting), or inside `[[...]]` / restored macro syntax.
 
 ---
 

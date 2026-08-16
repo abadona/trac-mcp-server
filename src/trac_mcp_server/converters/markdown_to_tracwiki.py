@@ -16,6 +16,93 @@ from .common import ConversionResult, markdown_to_tracwiki_lang
 _SLUG_DROP_RE = re.compile(r"[^\w\- ]+")
 _SLUG_WS_RE = re.compile(r"\s+")
 
+# `tracwiki_to_markdown`'s "bracket" mode placeholder for a macro it
+# couldn't resolve, e.g. `[MACRO: PageOutline]` or `[MACRO: TOC(depth=2)]`.
+# Restored back to `[[PageOutline]]` / `[[TOC(depth=2)]]` before parsing
+# even starts (see `_stash_bracket_syntax`) so a wiki_get -> edit ->
+# wiki_update round trip doesn't flatten the macro permanently (ticket #19).
+_MACRO_PLACEHOLDER_RE = re.compile(r"\[MACRO:\s*([^\]]+)\]")
+
+# Double-bracket syntax ([[Page]], [[Page|Label]], [[TOC]], ...) typed
+# directly in Markdown source. Stashed the same way `_MACRO_PLACEHOLDER_RE`
+# spans are, before parsing starts, so a macro/link name that happens to be
+# CamelCase-shaped (e.g. [[PageOutline]]) never has the CamelCase pass
+# below stuff a `!` inside the brackets.
+_BRACKET_SYNTAX_RE = re.compile(r"\[\[[^\]\n]*\]\]")
+
+# Sentinel used by `_stash_bracket_syntax`/`_restore_bracket_syntax`.
+_PLACEHOLDER_RE = re.compile(r"\x00WK(\d+)\x00")
+
+# Trac's own WikiCamelCase auto-link pattern: a word with two or more
+# "humps" (uppercase letter, then a lowercase run), e.g. WiFi, LoRa,
+# PageOutline. Deliberately excludes pure-acronym runs like IPAddress (no
+# lowercase between the leading capitals) to match Trac's real behavior.
+# `(?<!!)` skips words the author already escaped by hand.
+_CAMELCASE_RE = re.compile(r"(?<!!)\b[A-Z][a-z]+(?:[A-Z][a-z]*)+\b")
+
+# Matches exactly the "!" a `_CAMELCASE_RE` substitution would have added
+# (a "!" directly before a CamelCase-shaped word), so `link()` can undo it
+# for its own `text` argument -- see `_unescape_camelcase`.
+_CAMELCASE_ESCAPE_RE = re.compile(r"!(?=[A-Z][a-z]+(?:[A-Z][a-z]*)+\b)")
+
+
+def _unescape_camelcase(text: str) -> str:
+    """Undo `text()`'s CamelCase `!`-escaping for a link's display text.
+
+    A TracWiki link's label (the second half of ``[url text]``) is opaque,
+    literal text -- Trac never re-parses it for WikiFormatting, so it can
+    never trigger the broken auto-link `text()` defends against (ticket
+    #27). But `text()` runs on a link's inline children before `link()`
+    ever sees them, with no way to know in advance that this particular
+    text is headed into a link label rather than plain prose, so any
+    CamelCase word in a link's text (e.g. the "SomePage" in `[SomePage]
+    (wiki:SomePage)`, or the text mistune's autolink expansion sets equal
+    to the url) arrives here already escaped. `link()` undoes it before
+    using `text` for anything -- both so the visible label doesn't show a
+    spurious "!", and so a `text == url` comparison used to detect
+    autolinks (`<wiki:Page>` -> `[wiki:Page]`, not a doubled target) isn't
+    broken by the two sides no longer matching.
+    """
+    return _CAMELCASE_ESCAPE_RE.sub("", text)
+
+
+def _stash_bracket_syntax(markdown_text: str) -> tuple[str, list[str]]:
+    """Replace `[MACRO: ...]` / `[[...]]` spans with sentinel placeholders.
+
+    Must run on the *raw* Markdown source, before mistune parses it.
+    mistune's link-scanning splits a "[...]" span that doesn't resolve to
+    a real link into several separate text fragments (open bracket / inner
+    content / close bracket rendered via separate `text()` calls), so
+    trying to shield these spans from *within* the per-fragment `text()`
+    renderer doesn't work reliably -- by the time `text()` sees "PageOutline"
+    on its own, the surrounding brackets that would identify it as
+    macro/link syntax are already gone. The placeholder has to exist
+    before mistune ever sees the "[" character (ticket #19/#27 interaction).
+    """
+    placeholders: list[str] = []
+
+    def stash_macro(m: re.Match[str]) -> str:
+        placeholders.append(f"[[{m.group(1)}]]")
+        return f"\x00WK{len(placeholders) - 1}\x00"
+
+    def stash_literal(m: re.Match[str]) -> str:
+        placeholders.append(m.group(0))
+        return f"\x00WK{len(placeholders) - 1}\x00"
+
+    text = _MACRO_PLACEHOLDER_RE.sub(stash_macro, markdown_text)
+    text = _BRACKET_SYNTAX_RE.sub(stash_literal, text)
+    return text, placeholders
+
+
+def _restore_bracket_syntax(text: str, placeholders: list[str]) -> str:
+    """Restore sentinels stashed by `_stash_bracket_syntax` after rendering."""
+
+    def restore(m: re.Match[str]) -> str:
+        return placeholders[int(m.group(1))]
+
+    return _PLACEHOLDER_RE.sub(restore, text)
+
+
 # TracLink resolvers that Trac understands natively as the target of
 # `[target text]`.  Deliberately an explicit allowlist rather than
 # "anything scheme-shaped": non-URL sentinels such as ``auto-pm:`` or
@@ -93,10 +180,30 @@ class TracWikiRenderer(mistune.BaseRenderer):
         self._heading_anchors = heading_anchors
         # Track column alignments for current table
         self._table_alignments: list[str | None] = []
+        # Last character emitted by the immediately preceding sibling,
+        # updated by render_token() after every call. Lets linebreak()
+        # tell whether "[[BR]]" would land directly against a non-space
+        # character (ticket #29).
+        self._last_char = "\n"
 
     def text(self, text: str) -> str:
-        """Render plain text."""
-        return text
+        """Render plain text.
+
+        Defensively `!`-prefixes bare CamelCase-shaped prose words (Trac's
+        own WikiCamelCase auto-link pattern, e.g. WiFi, LoRa) so Trac's
+        renderer treats them as literal text instead of attempting a
+        broken missing-page link. Markdown has no CamelCase-auto-link
+        concept, so any such word reaching this method was never meant as
+        a link (ticket #27).
+
+        `[MACRO: Name]` placeholders and literal `[[...]]` syntax typed in
+        the Markdown source never reach this method as such -- they're
+        stashed as sentinel placeholders by `_stash_bracket_syntax` before
+        mistune even starts parsing (ticket #19), so a macro/page name
+        that happens to be CamelCase-shaped is never escaped inside its
+        brackets.
+        """
+        return _CAMELCASE_RE.sub(lambda m: f"!{m.group(0)}", text)
 
     def emphasis(self, text: str) -> str:
         """Render italic text (single emphasis)."""
@@ -111,7 +218,18 @@ class TracWikiRenderer(mistune.BaseRenderer):
         return f"`{text}`"
 
     def linebreak(self) -> str:
-        """Render line break."""
+        """Render line break.
+
+        Trac's wiki-link grammar treats a colon-valued token immediately
+        followed by "[[BR]]" (no space) as a candidate `wikiname:target`
+        TracLink, greedily consuming the "[[BR]]" into the failed
+        link-target parse instead of recognizing it as a macro -- it
+        renders as the literal string "[[BR]]" rather than a line break.
+        Inserting a leading space when the preceding character isn't
+        already whitespace avoids the collision (ticket #29).
+        """
+        if self._last_char and not self._last_char.isspace():
+            return " [[BR]]\n"
         return "[[BR]]\n"
 
     def softbreak(self) -> str:
@@ -232,6 +350,11 @@ class TracWikiRenderer(mistune.BaseRenderer):
         survives round-tripping instead of getting mangled into a broken
         TracWiki link.
         """
+        # A link's label is opaque to Trac's WikiFormatting -- undo any
+        # CamelCase "!"-escaping text() applied before it knew this text
+        # was headed into a link rather than plain prose (ticket #27).
+        text = _unescape_camelcase(text)
+
         # External URLs - no prefix needed
         if url.startswith(("http://", "https://", "ftp://", "mailto:")):
             return f"[{url} {text}]"
@@ -346,9 +469,13 @@ class TracWikiRenderer(mistune.BaseRenderer):
         """
         # For header cells, wrap with = markers and apply alignment
         if head:
-            # Handle empty cells
+            # Handle empty cells. A bare "" would concatenate directly
+            # against the adjacent cell's leading "||", producing "||||" --
+            # TracWiki's colspan-2 marker, not two separate cells -- and
+            # shifting every following header left by one (ticket #20). A
+            # single space keeps the cell genuinely empty without merging.
             if not text:
-                cell_content = ""
+                cell_content = " "
             else:
                 match align:
                     case "left":
@@ -373,14 +500,26 @@ class TracWikiRenderer(mistune.BaseRenderer):
                     # Centered: space on both sides
                     cell_content = f" {text} "
                 case _:
-                    # No alignment: just the text
-                    cell_content = text
+                    # No alignment: just the text. Same "||||" colspan
+                    # hazard as the header branch above applies to an
+                    # empty body cell too, so fall back to a single space.
+                    cell_content = text or " "
 
         # Add || separator after cell (will be concatenated with next cell)
         return cell_content + "||"
 
     def render_token(self, token: dict[str, Any], state) -> str:
-        """Override token rendering to handle list depth tracking and extract text/attrs."""
+        """Override token rendering to handle list depth tracking and extract text/attrs.
+
+        Every branch funnels through the ``result = ...`` / fallthrough
+        pattern below rather than returning directly, so the single
+        bookkeeping line after the ``match`` can update ``self._last_char``
+        for whichever token was actually emitted -- children are rendered
+        (and update the state themselves) before a branch's own wrapping
+        text is appended, so this always reflects the true last character
+        of this call's return value, not an intermediate child's (ticket
+        #29).
+        """
         # Get the token type
         token_type: str = token.get("type") or ""
         func = self._get_method(token_type)
@@ -417,9 +556,9 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
                 # Call list renderer with text and ordered flag
                 if attrs:
-                    return func(text, **attrs)
+                    result = func(text, **attrs)
                 else:
-                    return func(text, False)
+                    result = func(text, False)
 
             # For list items, we need to determine depth and type
             case "list_item":
@@ -483,9 +622,9 @@ class TracWikiRenderer(mistune.BaseRenderer):
 
                 # Combine text and nested list
                 if nested_text:
-                    return f"{prefix} {text}\n{nested_text}\n"
+                    result = f"{prefix} {text}\n{nested_text}\n"
                 else:
-                    return f"{prefix} {text}\n"
+                    result = f"{prefix} {text}\n"
 
             # Default rendering: extract text from raw, text, or children, pass attrs
             case _:
@@ -499,15 +638,22 @@ class TracWikiRenderer(mistune.BaseRenderer):
                 else:
                     # No text content, just call with attrs
                     if attrs:
-                        return func(**attrs)
+                        result = func(**attrs)
                     else:
-                        return func()
+                        result = func()
+                    if result:
+                        self._last_char = result[-1]
+                    return result
 
                 # Call function with text and attrs
                 if attrs:
-                    return func(text, **attrs)
+                    result = func(text, **attrs)
                 else:
-                    return func(text)
+                    result = func(text)
+
+        if result:
+            self._last_char = result[-1]
+        return result
 
 
 def markdown_to_tracwiki(
@@ -532,8 +678,14 @@ def markdown_to_tracwiki(
         renderer=renderer, plugins=["table"]
     )
 
+    # Stash [MACRO: ...] / [[...]] spans before mistune ever sees a "["
+    # (see _stash_bracket_syntax for why this can't happen inside text()).
+    stashed_text, placeholders = _stash_bracket_syntax(markdown_text)
+
     # Parse and render
-    result: str = markdown(markdown_text)  # type: ignore[assignment]
+    result: str = markdown(stashed_text)  # type: ignore[assignment]
+
+    result = _restore_bracket_syntax(result, placeholders)
 
     # Clean up extra newlines (but preserve double newlines for paragraph separation)
     result = re.sub(r"\n{3,}", "\n\n", result)
