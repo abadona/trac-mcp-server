@@ -1288,16 +1288,19 @@ def test_roundtrip_tw_full_document_preserves_all_construct_markers(
 def test_roundtrip_tw_unknown_macro_becomes_bracket_text(
     monkeypatch, capsys
 ):
-    """[[SomeMacro(arg)]] becomes [MACRO: SomeMacro(arg)] on tw→md with default --unknown-macros bracket.
+    """[[SomeMacro(arg)]] becomes [MACRO: SomeMacro(arg)] on tw→md, and back on md→tw.
 
     Only names carrying explicit "(args)" -- which a plain WikiLink never
     does -- or names on the known-macro allowlist are treated as macros
     (ticket #28: bare, unrecognized ``[[Word]]`` is now a WikiLink instead,
-    see test_roundtrip_tw_bare_bracket_link_becomes_wikilink below). The
-    tw→md→tw path for a genuine unrecognized macro is still intentionally
-    lossy: the bracket text is not a valid TracWiki macro and cannot be
-    round-tripped back. This test pins that divergence so a future
-    regression (e.g. the text silently vanishing) is immediately visible.
+    see test_roundtrip_tw_bare_bracket_link_becomes_wikilink below).
+
+    Regression test for ticket #19: the tw→md→tw path used to be lossy
+    here -- "[MACRO: SomeMacro(arg)]" passed through the second hop as
+    literal text instead of being restored to "[[SomeMacro(arg)]]",
+    silently and permanently flattening the macro the first time a page
+    carrying one was edited via the Markdown path. It now round-trips
+    losslessly in default "bracket" mode, with no workaround needed.
     """
     tw_input = "[[SomeMacro(arg)]]\n"
     monkeypatch.setattr("sys.stdin", io.StringIO(tw_input))
@@ -1313,9 +1316,9 @@ def test_roundtrip_tw_unknown_macro_becomes_bracket_text(
     )
     assert rc2 == EXIT_OK
     result = capsys.readouterr().out
-    # Second hop: bracket text passes through as-is (no [[...]] restored)
-    assert "[MACRO: SomeMacro(arg)]" in result
-    assert "[[SomeMacro(arg)]]" not in result
+    # Second hop: [MACRO: SomeMacro(arg)] → [[SomeMacro(arg)]] (restored)
+    assert "[[SomeMacro(arg)]]" in result
+    assert "[MACRO: SomeMacro(arg)]" not in result
 
 
 def test_roundtrip_tw_unknown_macro_preserve_mode_roundtrips(

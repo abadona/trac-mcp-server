@@ -969,14 +969,19 @@ class TestTableConversion(unittest.TestCase):
         self.assertIn("|| R||", result)  # right
 
     def test_md_to_tw_empty_cells(self):
-        """Test empty cells in Markdown table."""
+        """Test empty cells in Markdown table.
+
+        An empty cell renders as a lone space, not a bare "||" run --
+        "||||" is TracWiki's colspan-2 marker, not two empty cells, and
+        would merge the empty column into its neighbor and shift every
+        following header/cell left by one (ticket #20).
+        """
         md = """| A | | C |
 | --- | --- | --- |
 | 1 | | 3 |"""
         result = markdown_to_tracwiki(md)
-        # Empty cells should produce || without content
-        self.assertIn("||=A=||||=C=||", result)
-        self.assertIn("||1||||3||", result)
+        self.assertIn("||=A=|| ||=C=||", result)
+        self.assertIn("||1|| ||3||", result)
 
     def test_md_to_tw_single_column(self):
         """Test single column Markdown table."""
@@ -1601,13 +1606,20 @@ class TestHeadingExplicitAnchor(unittest.TestCase):
     def test_heading_strips_inline_code_from_slug(self):
         r"""Inline code (``\`backticks\``) is stripped from the slug
         but preserved in the visible heading text.
+
+        "EvalRef" is CamelCase-shaped, so the visible heading text carries
+        the defensive "!" prefix `text()` adds for any such word (ticket
+        #27) -- Trac's heading syntax runs through the same WikiFormatting
+        engine as body prose, so it's just as auto-link-prone. The slug
+        itself is unaffected: `_heading_slug` strips non-word/dash/space
+        characters, "!" included, before slugifying.
         """
         self.assertEqual(
             markdown_to_tracwiki(
                 "## EvalRef marker fields (`ticket-comment`)",
                 heading_anchors=True,
             ),
-            "== EvalRef marker fields (`ticket-comment`) == "
+            "== !EvalRef marker fields (`ticket-comment`) == "
             "#evalref-marker-fields-ticket-comment",
         )
 
@@ -1851,6 +1863,102 @@ class TestDetectFormatHeuristicFenceAware(unittest.TestCase):
             "Each field maps to a column in evals/schema.py.\n"
         )
         self.assertEqual(detect_format_heuristic(text), "markdown")
+
+
+class TestConverterTicketRegressions(unittest.TestCase):
+    """Regression tests for specific numbered tickets against the
+    markdown_to_tracwiki converter, kept together since they were all
+    found and fixed in the same sweep.
+    """
+
+    def test_ticket_19_macro_placeholder_restored(self):
+        """[MACRO: Name(args)] round-trips back to [[Name(args)]].
+
+        `tracwiki_to_markdown`'s "bracket" mode placeholder for an
+        unresolved macro used to pass through markdown_to_tracwiki as
+        literal text, permanently flattening the macro the first time a
+        page carrying one was edited via the Markdown path.
+        """
+        self.assertEqual(
+            markdown_to_tracwiki("[MACRO: PageOutline]"),
+            "[[PageOutline]]",
+        )
+        self.assertEqual(
+            markdown_to_tracwiki("[MACRO: TOC(depth=2)]"),
+            "[[TOC(depth=2)]]",
+        )
+
+    def test_ticket_19_literal_bracket_syntax_survives(self):
+        """[[Page]] typed directly in Markdown source passes through
+        unchanged rather than being corrupted by the CamelCase escaping
+        pass (ticket #27) meant for plain prose.
+        """
+        self.assertEqual(
+            markdown_to_tracwiki("[[SomePage]]"), "[[SomePage]]"
+        )
+
+    def test_ticket_20_empty_leading_header_cell(self):
+        """A leading empty header cell doesn't collapse into TracWiki's
+        "||||" colspan-2 marker, which would misalign every following
+        header by one column.
+        """
+        md = (
+            "| | Clip lead | Ground spring |\n"
+            "|---|---|---|\n"
+            "| 5 V undershoot | -2.40 V | -0.56 V |"
+        )
+        result = markdown_to_tracwiki(md)
+        self.assertIn("|| ||=Clip lead=||=Ground spring=||", result)
+
+    def test_ticket_27_camelcase_prose_escaped(self):
+        """Plain-prose CamelCase-shaped words get a defensive "!" prefix
+        so Trac's WikiFormatting doesn't auto-link them into broken
+        missing-page links.
+        """
+        result = markdown_to_tracwiki(
+            "WiFi credentials live in `.env`. The LoRa wire format is "
+            "versioned separately."
+        )
+        self.assertIn("!WiFi", result)
+        self.assertIn("!LoRa", result)
+        # Inside a code span, WiFi/LoRa-shaped text must NOT be escaped --
+        # Trac's WikiFormatting doesn't touch {{{ }}} / `` `` content.
+        result = markdown_to_tracwiki("`WiFiConfig` is a struct.")
+        self.assertIn("`WiFiConfig`", result)
+
+    def test_ticket_27_camelcase_not_escaped_in_link_text(self):
+        """A link's label is opaque to Trac's WikiFormatting, so a
+        CamelCase-shaped word there must not get escaped -- doing so
+        would put a stray "!" in the visible link text and could break
+        structural comparisons (e.g. autolink detection).
+        """
+        self.assertEqual(
+            markdown_to_tracwiki("[SomePage](wiki:SomePage)"),
+            "[wiki:SomePage SomePage]",
+        )
+        self.assertEqual(
+            markdown_to_tracwiki("<wiki:SomePage>"), "[wiki:SomePage]"
+        )
+
+    def test_ticket_29_br_gets_leading_space_after_colon_token(self):
+        """A hard line break directly after a colon-valued token (e.g.
+        "substrate:trac") gets a leading space before [[BR]] -- without
+        it, Trac's wiki-link grammar greedily consumes "[[BR]]" into a
+        failed `wikiname:target` TracLink parse instead of recognizing
+        it as the line-break macro.
+        """
+        result = markdown_to_tracwiki("substrate:trac  \nnext line")
+        self.assertIn("substrate:trac [[BR]]", result)
+
+    def test_ticket_29_br_also_spaced_after_plain_word(self):
+        """The fix is the "preceding char isn't whitespace" rule from the
+        ticket's own remediation suggestion, applied unconditionally --
+        not conditioned on detecting a colon specifically. A plain
+        (non-colon) word before [[BR]] gets the same leading space, which
+        is unnecessary (Trac already renders fine there) but harmless.
+        """
+        result = markdown_to_tracwiki("global  \nnext line")
+        self.assertIn("global [[BR]]", result)
 
 
 if __name__ == "__main__":
