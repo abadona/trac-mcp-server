@@ -6,6 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- `tracwiki_to_markdown` no longer corrupts `[[Page]]` WikiLinks read via `wiki_get`/`wiki_search` (Trac #28, critical): plain double-bracket links were being routed through the unknown-macro placeholder mechanism, which silently discarded single links and, when two or more placeholders landed near each other, merged them into one unterminated construct with a leaked raw `\x00` byte
+  - `[[Page]]` / `[[Page|Label]]` are now recognized as WikiLinks (matching Trac's own macro-name-registry-first resolution) and convert to real `[text](wiki:Page)` Markdown links; only a small allowlist of genuine Trac macro names, or any `[[Name(args)]]` carrying explicit arguments, still go through the macro path
+  - Fixed two latent greedy-regex bugs this exposed: the macro-placeholder restore pass and the single-bracket `[url text]` link pass could each span past their own closing token into a neighboring link/macro when several appeared close together
+
 ### Added
 - Streamable HTTP transport (Trac #26): `trac-mcp-server --transport http` serves MCP over `POST/GET/DELETE <path>` (default `/mcp`) via a Starlette app run by `uvicorn`, alongside the unchanged stdio default
   - Stateful sessions (`Mcp-Session-Id`, the MCP SDK default), so one long-lived process can serve multiple concurrent clients/sessions

@@ -1288,20 +1288,24 @@ def test_roundtrip_tw_full_document_preserves_all_construct_markers(
 def test_roundtrip_tw_unknown_macro_becomes_bracket_text(
     monkeypatch, capsys
 ):
-    """[[SomeMacro]] becomes [MACRO: SomeMacro] on tw→md with default --unknown-macros bracket.
+    """[[SomeMacro(arg)]] becomes [MACRO: SomeMacro(arg)] on tw→md with default --unknown-macros bracket.
 
-    The tw→md→tw path is intentionally lossy: the bracket text is not a
-    valid TracWiki macro and cannot be round-tripped back.  This test pins
-    the divergence so a future regression (e.g. the text silently vanishing)
-    is immediately visible.
+    Only names carrying explicit "(args)" -- which a plain WikiLink never
+    does -- or names on the known-macro allowlist are treated as macros
+    (ticket #28: bare, unrecognized ``[[Word]]`` is now a WikiLink instead,
+    see test_roundtrip_tw_bare_bracket_link_becomes_wikilink below). The
+    tw→md→tw path for a genuine unrecognized macro is still intentionally
+    lossy: the bracket text is not a valid TracWiki macro and cannot be
+    round-tripped back. This test pins that divergence so a future
+    regression (e.g. the text silently vanishing) is immediately visible.
     """
-    tw_input = "[[SomeMacro]]\n"
+    tw_input = "[[SomeMacro(arg)]]\n"
     monkeypatch.setattr("sys.stdin", io.StringIO(tw_input))
     rc1 = main(["--from", "tracwiki", "--to", "md"])
     assert rc1 == EXIT_OK
     intermediate = capsys.readouterr().out
-    # First hop: [[SomeMacro]] → [MACRO: SomeMacro]
-    assert "[MACRO: SomeMacro]" in intermediate
+    # First hop: [[SomeMacro(arg)]] → [MACRO: SomeMacro(arg)]
+    assert "[MACRO: SomeMacro(arg)]" in intermediate
 
     monkeypatch.setattr("sys.stdin", io.StringIO(intermediate))
     rc2 = main(
@@ -1310,20 +1314,20 @@ def test_roundtrip_tw_unknown_macro_becomes_bracket_text(
     assert rc2 == EXIT_OK
     result = capsys.readouterr().out
     # Second hop: bracket text passes through as-is (no [[...]] restored)
-    assert "[MACRO: SomeMacro]" in result
-    assert "[[SomeMacro]]" not in result
+    assert "[MACRO: SomeMacro(arg)]" in result
+    assert "[[SomeMacro(arg)]]" not in result
 
 
 def test_roundtrip_tw_unknown_macro_preserve_mode_roundtrips(
     monkeypatch, capsys
 ):
-    """[[SomeMacro]] with --unknown-macros preserve survives tw → md → tw intact.
+    """[[SomeMacro(arg)]] with --unknown-macros preserve survives tw → md → tw intact.
 
     When the user opts in to preserve mode, the macro literal passes through
     unchanged across both hops — a case where the tw→md→tw round trip IS
     identity for macro syntax.
     """
-    tw_input = "[[SomeMacro]]\n"
+    tw_input = "[[SomeMacro(arg)]]\n"
     monkeypatch.setattr("sys.stdin", io.StringIO(tw_input))
     rc1 = main(
         [
@@ -1337,8 +1341,8 @@ def test_roundtrip_tw_unknown_macro_preserve_mode_roundtrips(
     )
     assert rc1 == EXIT_OK
     intermediate = capsys.readouterr().out
-    # Preserve mode: [[SomeMacro]] must survive to the md intermediate
-    assert "[[SomeMacro]]" in intermediate
+    # Preserve mode: [[SomeMacro(arg)]] must survive to the md intermediate
+    assert "[[SomeMacro(arg)]]" in intermediate
 
     monkeypatch.setattr("sys.stdin", io.StringIO(intermediate))
     rc2 = main(
@@ -1346,7 +1350,55 @@ def test_roundtrip_tw_unknown_macro_preserve_mode_roundtrips(
     )
     assert rc2 == EXIT_OK
     result = capsys.readouterr().out
-    assert "[[SomeMacro]]" in result
+    assert "[[SomeMacro(arg)]]" in result
+
+
+def test_roundtrip_tw_bare_bracket_link_becomes_wikilink(
+    monkeypatch, capsys
+):
+    """[[SomePage]] converts to a real Markdown link, not inert macro text.
+
+    Regression test for ticket #28: bare, unrecognized ``[[Word]]`` (no
+    "(args)", not a known Trac macro name) is a plain WikiLink in TracWiki,
+    not a macro. Routing it through the macro-placeholder path used to
+    destroy the link (and could corrupt neighboring links). It should
+    survive as ``[SomePage](wiki:SomePage)`` in Markdown and round-trip to
+    the equivalent single-bracket TracWiki link form.
+    """
+    tw_input = "[[SomePage]]\n"
+    monkeypatch.setattr("sys.stdin", io.StringIO(tw_input))
+    rc1 = main(["--from", "tracwiki", "--to", "md"])
+    assert rc1 == EXIT_OK
+    intermediate = capsys.readouterr().out
+    assert "[SomePage](wiki:SomePage)" in intermediate
+    assert "MACRO" not in intermediate
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(intermediate))
+    rc2 = main(
+        ["--from", "md", "--to", "tracwiki", "--heading-anchors", "off"]
+    )
+    assert rc2 == EXIT_OK
+    result = capsys.readouterr().out
+    assert "[wiki:SomePage SomePage]" in result
+
+
+def test_roundtrip_tw_adjacent_bracket_links_stay_separate(
+    monkeypatch, capsys
+):
+    """Two [[Page]] links on one line convert independently, not merged.
+
+    Regression test for ticket #28's core symptom: [[PageA]], [[PageB]] on
+    the same line used to be merged into one corrupted, unterminated
+    placeholder construct with an embedded raw control character.
+    """
+    tw_input = "See [[PageA]] and [[PageB]] for details.\n"
+    monkeypatch.setattr("sys.stdin", io.StringIO(tw_input))
+    rc = main(["--from", "tracwiki", "--to", "md"])
+    assert rc == EXIT_OK
+    result = capsys.readouterr().out
+    assert "[PageA](wiki:PageA)" in result
+    assert "[PageB](wiki:PageB)" in result
+    assert "\x00" not in result
 
 
 def test_roundtrip_md_heading_anchor_survives_when_on(
