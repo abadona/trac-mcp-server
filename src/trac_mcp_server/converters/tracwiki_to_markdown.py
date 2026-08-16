@@ -105,7 +105,11 @@ class TracWikiParser:
         # Detect unsupported macros (preserved but not functional).
         # Only genuine macro names trigger this -- [[Page]] / [[Page|Label]]
         # WikiLinks are converted to real Markdown links, not placeholders.
-        for m in re.finditer(r"\[\[(?!Image|BR)(\w+)(\([^)]*\))?\]\]", text, re.IGNORECASE):
+        for m in re.finditer(
+            r"\[\[(?!Image|BR)(\w+)(\([^)]*\))?\]\]",
+            text,
+            re.IGNORECASE,
+        ):
             if m.group(1).lower() in _KNOWN_MACROS or m.group(2):
                 self.warnings.append(
                     "Unknown macros detected - preserved as [MACRO: ...] notation (not functional in Markdown)"
@@ -325,7 +329,9 @@ class TracWikiParser:
                 return match.group(0)  # Keep macros unchanged
             return f"<{content}>"
 
-        text = re.sub(r"\[([^\]\s]+)\](?!\()", convert_simple_link, text)
+        text = re.sub(
+            r"\[([^\]\s]+)\](?!\()", convert_simple_link, text
+        )
         return text
 
     def _convert_lists(self, text: str) -> str:
