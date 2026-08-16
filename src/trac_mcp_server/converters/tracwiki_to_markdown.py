@@ -8,6 +8,36 @@ from .common import ConversionResult, tracwiki_to_markdown_lang
 # Type alias for the unknown_macros rendering mode.
 UnknownMacros = Literal["bracket", "preserve", "drop"]
 
+# Known Trac macro names reachable via ``[[Name]]`` / ``[[Name(args)]]``
+# syntax. Anything else shaped like ``[[Word]]`` or ``[[Word|Label]]`` is a
+# WikiLink, not a macro -- mirrors how Trac's own macro resolver falls back
+# to a page link for names it doesn't recognize (ticket #28).
+_KNOWN_MACROS = frozenset(
+    {
+        "toc",
+        "pageoutline",
+        "recentchanges",
+        "titleindex",
+        "intertrac",
+        "interwiki",
+        "interwikimap",
+        "ticketquery",
+        "include",
+        "timeline",
+        "translatedpages",
+        "traciniticket",
+        "tracguidetoc",
+        "workflow",
+        "listtagged",
+        "macrolist",
+        "tagcloud",
+        "span",
+        "knownmimetypes",
+        "milestone",
+        "repos",
+    }
+)
+
 
 class TracWikiParser:
     """Parser for converting TracWiki syntax to Markdown format."""
@@ -30,6 +60,7 @@ class TracWikiParser:
         """
         self.warnings: list[str] = []
         self._unknown_macros = unknown_macros
+        self._link_placeholders: list[str] = []
 
     def parse(self, tracwiki_text: str) -> ConversionResult:
         """
@@ -45,6 +76,7 @@ class TracWikiParser:
             ConversionResult with Markdown text and warnings about lossy conversions
         """
         self.warnings = []
+        self._link_placeholders = []
         self._detect_lossy_elements(tracwiki_text)
 
         text = tracwiki_text
@@ -58,6 +90,7 @@ class TracWikiParser:
         text = self._convert_other_elements(text)
         text = self._convert_tables(text)
         text = self._restore_macro_placeholders(text)
+        text = self._restore_link_placeholders(text)
 
         return ConversionResult(
             text=text,
@@ -69,11 +102,19 @@ class TracWikiParser:
 
     def _detect_lossy_elements(self, text: str) -> None:
         """Detect lossy elements before conversion and add warnings."""
-        # Detect unsupported macros (preserved but not functional)
-        if re.search(r"\[\[(?!Image|BR)\w+", text):
-            self.warnings.append(
-                "Unknown macros detected - preserved as [MACRO: ...] notation (not functional in Markdown)"
-            )
+        # Detect unsupported macros (preserved but not functional).
+        # Only genuine macro names trigger this -- [[Page]] / [[Page|Label]]
+        # WikiLinks are converted to real Markdown links, not placeholders.
+        for m in re.finditer(
+            r"\[\[(?!Image|BR)(\w+)(\([^)]*\))?\]\]",
+            text,
+            re.IGNORECASE,
+        ):
+            if m.group(1).lower() in _KNOWN_MACROS or m.group(2):
+                self.warnings.append(
+                    "Unknown macros detected - preserved as [MACRO: ...] notation (not functional in Markdown)"
+                )
+                break
 
         # Detect definition lists
         if re.search(r"^\s*.+?::\s*.+$", text, re.MULTILINE):
@@ -185,29 +226,50 @@ class TracWikiParser:
         # These should pass through unchanged - they're not ambiguous with Markdown
         # Already valid in plaintext, agents can understand the notation
 
-        # Handle unknown macros: [[PageOutline]], [[TOC]], [[RecentChanges]] etc.
-        # Rendering mode is controlled by self._unknown_macros (set via
-        # --unknown-macros CLI flag).  Known macros (Image, BR) are already
-        # handled above and are unaffected by this setting.
-        def handle_unknown_macro(m: re.Match[str]) -> str:
-            macro_name = m.group(1)
+        # Handle remaining double-bracket syntax: either a genuine macro
+        # ([[PageOutline]], [[TOC]], [[RecentChanges(args)]], ...) or a plain
+        # WikiLink ([[Page]], [[Page|Label]]). Only names in _KNOWN_MACROS
+        # (or anything carrying explicit "(args)", which plain links never
+        # do) are treated as macros; everything else is a page link -- see
+        # ticket #28, where routing plain links through the macro-placeholder
+        # path corrupted adjacent links.
+        # Rendering mode for genuine macros is controlled by
+        # self._unknown_macros (set via --unknown-macros CLI flag). Known
+        # macros (Image, BR) are already handled above and are unaffected by
+        # this setting.
+        def handle_bracket(m: re.Match[str]) -> str:
+            name = m.group(1)
             args = m.group(2) if m.group(2) else ""
-            match self._unknown_macros:
-                case "bracket":
-                    # Current default: emit a placeholder restored to [MACRO: ...]
-                    return f"\x00MACRO:{macro_name}{args}\x00"
-                case "preserve":
-                    # Leave the original [[MacroName(args)]] literal unchanged.
-                    return m.group(0)
-                case "drop":
-                    # Silently omit the macro from the output.
-                    return ""
-                case _:
-                    return ""
+            label = m.group(3)
+            if args or name.lower() in _KNOWN_MACROS:
+                match self._unknown_macros:
+                    case "bracket":
+                        # Current default: emit a placeholder restored to [MACRO: ...]
+                        return f"\x00MACRO:{name}{args}\x00"
+                    case "preserve":
+                        # Leave the original [[MacroName(args)]] literal unchanged.
+                        return m.group(0)
+                    case "drop":
+                        # Silently omit the macro from the output.
+                        return ""
+                    case _:
+                        return ""
+            # Plain WikiLink: mirror the [text](wiki:Page) shape that
+            # single-bracket [wiki:Page text] links already produce, so the
+            # round trip back through markdown_to_tracwiki (ticket #17)
+            # restores it correctly. Stashed behind an opaque placeholder
+            # (like macros already are) rather than emitted literally --
+            # later passes such as _convert_links and _convert_tables
+            # re-scan for "[...]" / "|" shapes and would otherwise mangle a
+            # link whose label contains a space, "|", or other punctuation
+            # (ticket #28).
+            display = label if label else name
+            self._link_placeholders.append(f"[{display}](wiki:{name})")
+            return f"\x00LINK{len(self._link_placeholders) - 1}\x00"
 
         text = re.sub(
-            r"\[\[(?!Image|BR)(\w+)(\([^)]*\))?\]\]",
-            handle_unknown_macro,
+            r"\[\[(?!Image|BR)(\w+)(\([^)]*\))?(?:\|([^\]]+))?\]\]",
+            handle_bracket,
             text,
             flags=re.IGNORECASE,
         )
@@ -251,8 +313,12 @@ class TracWikiParser:
         Link with text: [url text] -> [text](url)
         Link without text: [url] -> <url>
         """
-        # Link with text
-        text = re.sub(r"\[(\S+)\s+([^\]]+)\]", r"[\2](\1)", text)
+        # Link with text. The URL half is restricted to non-"]" characters
+        # (not just non-whitespace) so a greedy match can't run past this
+        # link's closing "]" into a neighboring bracket construct -- e.g.
+        # the [text](wiki:Page) links _convert_macros emits for WikiLinks
+        # (ticket #28), or a second [url text] link later on the same line.
+        text = re.sub(r"\[([^\]\s]+)\s+([^\]]+)\]", r"[\2](\1)", text)
 
         # Link without text
         # Must not match if followed by (url), which would be a Markdown link we just created
@@ -263,7 +329,9 @@ class TracWikiParser:
                 return match.group(0)  # Keep macros unchanged
             return f"<{content}>"
 
-        text = re.sub(r"\[(\S+)\](?!\()", convert_simple_link, text)
+        text = re.sub(
+            r"\[([^\]\s]+)\](?!\()", convert_simple_link, text
+        )
         return text
 
     def _convert_lists(self, text: str) -> str:
@@ -528,11 +596,29 @@ class TracWikiParser:
     def _restore_macro_placeholders(self, text: str) -> str:
         """Restore macro placeholders.
 
-        Convert \x00MACRO:Name(args)\x00 back to [MACRO: Name(args)]
+        Convert \x00MACRO:Name(args)\x00 back to [MACRO: Name(args)].
+
+        The placeholder body is matched as "anything but \x00" rather than
+        "anything but )" -- the latter let a greedy match span past the
+        closing \x00 of one placeholder into the next when a page had
+        several placeholders near each other (e.g. two [[TOC]]-style macros
+        on nearby lines), merging them into one bracket and leaking raw
+        \x00 bytes into the output (ticket #28).
         """
-        return re.sub(
-            r"\x00MACRO:([^)]+(?:\([^)]*\))?)\x00", r"[MACRO: \1]", text
-        )
+        return re.sub(r"\x00MACRO:([^\x00]+)\x00", r"[MACRO: \1]", text)
+
+    def _restore_link_placeholders(self, text: str) -> str:
+        """Restore WikiLink placeholders stashed by ``_convert_macros``.
+
+        Convert ``\x00LINKn\x00`` back to the finished ``[text](wiki:Page)``
+        Markdown, once every pass that might otherwise re-parse "[...]" /
+        "|" characters inside the link's own label has already run.
+        """
+
+        def restore(m: re.Match[str]) -> str:
+            return self._link_placeholders[int(m.group(1))]
+
+        return re.sub(r"\x00LINK(\d+)\x00", restore, text)
 
 
 def tracwiki_to_markdown(

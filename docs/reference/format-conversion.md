@@ -67,7 +67,14 @@ The converter detects potentially lossy conversions and returns warnings:
 - TOC macros (use `[[PageOutline]]` instead)
 
 **TracWiki to Markdown:**
-- Unknown macros (preserved as `[MACRO: Name]` notation)
+- Unknown macros (preserved as `[MACRO: Name]` notation) -- only genuine
+  macro names (a fixed allowlist of Trac's built-ins, e.g. `TOC`,
+  `PageOutline`, `RecentChanges`) or `[[Name(args)]]` forms carrying explicit
+  arguments are treated as macros. A bare `[[PageName]]` or
+  `[[PageName|Label]]` is a WikiLink and converts to a real Markdown link
+  instead (see Links below) -- unrecognized macro names from third-party
+  plugins that take no arguments will be misread as links, since the
+  converter has no access to the live Trac instance's macro registry.
 - Definition lists (converted to bold text)
 - Table cell spanning (merged into single cell)
 - Multi-line table rows (joined into single line)
@@ -112,7 +119,19 @@ TracWiki:  [wiki:WikiPage Wiki Link]
 
 Markdown:  [Wiki Link](wiki:WikiPage)
 TracWiki:  [wiki:WikiPage Wiki Link]
+
+TracWiki:  [[WikiPage]]
+Markdown:  [WikiPage](wiki:WikiPage)
+
+TracWiki:  [[WikiPage|Wiki Link]]
+Markdown:  [Wiki Link](wiki:WikiPage)
 ```
+
+> **Note:** Double-bracket `[[WikiPage]]` / `[[WikiPage|Label]]` links only
+> ever appear on the TracWiki-to-Markdown side; `markdown_to_tracwiki`
+> always emits the single-bracket `[wiki:WikiPage ...]` form shown above, so
+> a `wiki_get` -> edit -> `wiki_update` round-trip normalizes double-bracket
+> links to single-bracket ones rather than preserving the original syntax.
 
 > **Note:** Link targets that already carry a TracLink resolver prefix -- `wiki:`, `ticket:`, `milestone:`, `source:`, `attachment:`, `changeset:`, and the rest of Trac's built-in resolvers -- are emitted verbatim, not prefixed a second time. This is the form `tracwiki_to_markdown` produces, so a `wiki_get` -> edit -> `wiki_update` round-trip that leaves existing links untouched preserves them exactly. Targets without a prefix (`WikiPage`, `Planning/Phases/Phase01`) get `wiki:` added.
 
