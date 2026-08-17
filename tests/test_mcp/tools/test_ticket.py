@@ -2272,3 +2272,237 @@ class TestHandleTicketReadTool:
         assert isinstance(result, types.CallToolResult)
         assert result.isError is True
         assert "Error (version_conflict)" in result.content[0].text
+
+
+class TestExtraFieldsSingle(unittest.TestCase):
+    """Tests for extra_fields on ticket_create and ticket_update.
+
+    extra_fields forwards custom Trac fields (fields defined in the
+    instance's [ticket-custom] section) that are not exposed as top-level
+    tool parameters. Standard fields set at the top level take precedence
+    on collision. Non-string values raise ValueError, which the registry
+    translates into a validation_error response.
+    """
+
+    def setUp(self):
+        self.mock_client = MagicMock()
+
+    def test_create_schema_advertises_extra_fields(self):
+        """ticket_create schema declares extra_fields as an object of strings."""
+        tool = next(
+            t for t in TICKET_TOOLS if t.name == "ticket_create"
+        )
+        prop = tool.inputSchema["properties"].get("extra_fields")
+        self.assertIsNotNone(
+            prop, "ticket_create must expose extra_fields"
+        )
+        self.assertEqual(prop["type"], "object")
+        self.assertEqual(
+            prop["additionalProperties"], {"type": "string"}
+        )
+
+    def test_update_schema_advertises_extra_fields(self):
+        """ticket_update schema declares extra_fields as an object of strings."""
+        tool = next(
+            t for t in TICKET_TOOLS if t.name == "ticket_update"
+        )
+        prop = tool.inputSchema["properties"].get("extra_fields")
+        self.assertIsNotNone(
+            prop, "ticket_update must expose extra_fields"
+        )
+        self.assertEqual(prop["type"], "object")
+        self.assertEqual(
+            prop["additionalProperties"], {"type": "string"}
+        )
+
+    def test_create_forwards_extra_fields(self):
+        """Custom fields from extra_fields land in the create attributes dict."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = 500
+            mock_convert.return_value = "desc"
+
+            result = asyncio.run(
+                _handle_create(
+                    self.mock_client,
+                    {
+                        "summary": "S",
+                        "description": "D",
+                        "extra_fields": {
+                            "parent": "#42",
+                            "project": "torrent",
+                        },
+                    },
+                )
+            )
+            self.assertFalse(bool(result.isError))
+            attributes = mock_run_sync.call_args[0][4]
+            self.assertEqual(attributes["parent"], "#42")
+            self.assertEqual(attributes["project"], "torrent")
+
+    def test_create_top_level_wins_over_extra_fields(self):
+        """A collision on a standard field name resolves to the top-level value."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = 501
+            mock_convert.return_value = "desc"
+
+            asyncio.run(
+                _handle_create(
+                    self.mock_client,
+                    {
+                        "summary": "S",
+                        "description": "D",
+                        "priority": "normal",
+                        "extra_fields": {"priority": "critical"},
+                    },
+                )
+            )
+            attributes = mock_run_sync.call_args[0][4]
+            self.assertEqual(attributes["priority"], "normal")
+
+    def test_create_extra_fields_rejects_non_string(self):
+        """A non-string value in extra_fields surfaces as ValueError."""
+        with self.assertRaises(ValueError) as cm:
+            asyncio.run(
+                _handle_create(
+                    self.mock_client,
+                    {
+                        "summary": "S",
+                        "description": "D",
+                        "extra_fields": {"parent": 42},
+                    },
+                )
+            )
+        self.assertIn("parent", str(cm.exception))
+        self.assertIn("string", str(cm.exception))
+
+    def test_create_extra_fields_rejects_non_dict(self):
+        """A non-dict extra_fields surfaces as ValueError."""
+        with self.assertRaises(ValueError):
+            asyncio.run(
+                _handle_create(
+                    self.mock_client,
+                    {
+                        "summary": "S",
+                        "description": "D",
+                        "extra_fields": ["parent", "#42"],
+                    },
+                )
+            )
+
+    def test_create_extra_fields_absent_is_noop(self):
+        """When extra_fields is omitted, no custom keys appear in attributes."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = 502
+            mock_convert.return_value = "desc"
+
+            asyncio.run(
+                _handle_create(
+                    self.mock_client,
+                    {"summary": "S", "description": "D"},
+                )
+            )
+            attributes = mock_run_sync.call_args[0][4]
+            self.assertEqual(attributes, {})
+
+    def test_create_extra_fields_empty_string_is_forwarded(self):
+        """An empty-string value is forwarded verbatim (clears a text field)."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_write.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = 503
+            mock_convert.return_value = "desc"
+
+            asyncio.run(
+                _handle_create(
+                    self.mock_client,
+                    {
+                        "summary": "S",
+                        "description": "D",
+                        "extra_fields": {"parent": ""},
+                    },
+                )
+            )
+            attributes = mock_run_sync.call_args[0][4]
+            self.assertEqual(attributes["parent"], "")
+
+    def test_update_forwards_extra_fields(self):
+        """Custom fields from extra_fields land in the update attributes dict."""
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = [42, None, None, {}]
+
+            asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {
+                        "ticket_id": 42,
+                        "extra_fields": {
+                            "parent": "#100",
+                            "project": "genomodules",
+                        },
+                    },
+                )
+            )
+            attributes = mock_run_sync.call_args[0][3]
+            self.assertEqual(attributes["parent"], "#100")
+            self.assertEqual(attributes["project"], "genomodules")
+
+    def test_update_top_level_wins_over_extra_fields(self):
+        """A collision on a standard field name resolves to the top-level value."""
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = [42, None, None, {}]
+
+            asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {
+                        "ticket_id": 42,
+                        "component": "core",
+                        "extra_fields": {"component": "peripheral"},
+                    },
+                )
+            )
+            attributes = mock_run_sync.call_args[0][3]
+            self.assertEqual(attributes["component"], "core")
+
+    def test_update_extra_fields_rejects_non_string(self):
+        """A non-string value in update extra_fields surfaces as ValueError."""
+        with self.assertRaises(ValueError):
+            asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {
+                        "ticket_id": 42,
+                        "extra_fields": {"parent": None},
+                    },
+                )
+            )

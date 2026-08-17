@@ -18,6 +18,53 @@ from .errors import build_error_response
 from .registry import ToolSpec
 
 
+def merge_extra_fields(source: dict, attributes: dict) -> None:
+    """Merge source['extra_fields'] into attributes, honoring precedence.
+
+    ``extra_fields`` carries custom Trac ticket fields that are not exposed
+    as top-level tool parameters (e.g. ``parent`` for TracChildTickets, or a
+    site-specific ``project`` field). Standard fields already present in
+    ``attributes`` take precedence -- an ``extra_fields`` entry for the same
+    key is silently skipped so a caller who mixes both cannot be surprised
+    by which one wins.
+
+    The input is validated: it must be a dict, and every value must be a
+    string. Non-string values are rejected explicitly rather than coerced,
+    so callers get a clear signal rather than a silent stringification that
+    Trac would then reject deeper in the stack.
+
+    Callers wrap the ValueError differently depending on context: single-
+    ticket handlers let the registry translate it into a validation_error
+    CallToolResult; batch handlers catch it in the per-item except block
+    and record a per-ticket failure.
+
+    Args:
+        source: The tool argument dict. The ``extra_fields`` key is read
+            from here if present; otherwise the call is a no-op.
+        attributes: The attribute dict that will be forwarded to
+            ``TracClient``. Mutated in place.
+
+    Raises:
+        ValueError: If ``extra_fields`` is present but not a dict, or if
+            any value inside it is not a string.
+    """
+    extra = source.get("extra_fields")
+    if extra is None:
+        return
+    if not isinstance(extra, dict):
+        raise ValueError(
+            "extra_fields must be an object mapping field name to string value."
+        )
+    for key, value in extra.items():
+        if not isinstance(value, str):
+            raise ValueError(
+                f"extra_fields[{key!r}] must be a string, got "
+                f"{type(value).__name__}."
+            )
+        if key not in attributes:
+            attributes[key] = value
+
+
 def _build_ticket_create_tool() -> types.Tool:
     """Build ticket_create tool definition with hardcoded defaults."""
     default_type = DEFAULT_TICKET_TYPE
@@ -68,6 +115,11 @@ def _build_ticket_create_tool() -> types.Tool:
                 "keywords": {
                     "type": "string",
                     "description": "Keywords/tags",
+                },
+                "extra_fields": {
+                    "type": "object",
+                    "description": "Optional map of custom Trac field name to string value, forwarded verbatim to the ticket. Use for fields defined in the instance's [ticket-custom] section (e.g. 'parent' for TracChildTickets) that are not exposed as top-level parameters. Standard fields specified at the top level take precedence on collision.",
+                    "additionalProperties": {"type": "string"},
                 },
             },
             "required": ["summary", "description"],
@@ -142,6 +194,11 @@ TICKET_WRITE_TOOLS = [
                     "type": "string",
                     "description": "Keywords/tags",
                 },
+                "extra_fields": {
+                    "type": "object",
+                    "description": "Optional map of custom Trac field name to string value, forwarded verbatim to the ticket. Use for fields defined in the instance's [ticket-custom] section (e.g. 'parent' for TracChildTickets) that are not exposed as top-level parameters. An empty string clears a text-typed custom field. Standard fields specified at the top level take precedence on collision.",
+                    "additionalProperties": {"type": "string"},
+                },
             },
             "required": ["ticket_id"],
         },
@@ -206,6 +263,11 @@ async def _handle_create(
         attributes["cc"] = args["cc"]
     if "keywords" in args:
         attributes["keywords"] = args["keywords"]
+
+    # Merge custom fields from extra_fields, without overriding standard
+    # fields already set above. Validation errors propagate as ValueError
+    # and are translated by the registry into a validation_error response.
+    merge_extra_fields(args, attributes)
 
     # Create ticket
     try:
@@ -303,6 +365,11 @@ async def _handle_update(
     for key, value in args.items():
         if key.startswith("action_"):
             attributes[key] = value
+
+    # Merge custom fields from extra_fields, without overriding standard
+    # fields already set above. Validation errors propagate as ValueError
+    # and are translated by the registry into a validation_error response.
+    merge_extra_fields(args, attributes)
 
     # Update ticket (client handles optimistic locking)
     await run_sync(client.update_ticket, ticket_id, comment, attributes)

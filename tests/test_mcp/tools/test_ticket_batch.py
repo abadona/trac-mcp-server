@@ -679,3 +679,181 @@ class TestHandleTicketBatchToolDispatcher(unittest.TestCase):
         )
 
         mock_handler.assert_awaited_once_with(self.mock_client, {})
+
+
+class TestExtraFieldsBatch(unittest.TestCase):
+    """Tests for extra_fields in ticket_batch_create and ticket_batch_update.
+
+    Per-item extra_fields work identically to the single-ticket path: the
+    dict is merged into the item's attributes with standard fields winning
+    on collision. A malformed extra_fields for one item fails that item
+    only (via the enclosing per-item ``except Exception``) without
+    aborting the batch.
+    """
+
+    def setUp(self):
+        self.mock_client = MagicMock()
+        self.mock_client.config.max_batch_size = 500
+
+    def test_batch_create_schema_advertises_extra_fields(self):
+        """ticket_batch_create per-item schema declares extra_fields."""
+        tool = next(
+            t
+            for t in TICKET_BATCH_TOOLS
+            if t.name == "ticket_batch_create"
+        )
+        item = tool.inputSchema["properties"]["tickets"]["items"]
+        prop = item["properties"].get("extra_fields")
+        self.assertIsNotNone(prop)
+        self.assertEqual(prop["type"], "object")
+        self.assertEqual(
+            prop["additionalProperties"], {"type": "string"}
+        )
+
+    def test_batch_update_schema_advertises_extra_fields(self):
+        """ticket_batch_update per-item schema declares extra_fields."""
+        tool = next(
+            t
+            for t in TICKET_BATCH_TOOLS
+            if t.name == "ticket_batch_update"
+        )
+        item = tool.inputSchema["properties"]["updates"]["items"]
+        prop = item["properties"].get("extra_fields")
+        self.assertIsNotNone(prop)
+        self.assertEqual(prop["type"], "object")
+        self.assertEqual(
+            prop["additionalProperties"], {"type": "string"}
+        )
+
+    def test_batch_create_forwards_extra_fields_per_item(self):
+        """Each item's extra_fields lands in its own attributes dict."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_batch.run_sync_limited"
+            ) as mock_rsl,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_batch.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_rsl.side_effect = [700, 701]
+            mock_convert.side_effect = lambda x: x
+
+            asyncio.run(
+                _handle_batch_create(
+                    self.mock_client,
+                    {
+                        "tickets": [
+                            {
+                                "summary": "A",
+                                "description": "d1",
+                                "extra_fields": {"parent": "#10"},
+                            },
+                            {
+                                "summary": "B",
+                                "description": "d2",
+                                "extra_fields": {"project": "torrent"},
+                            },
+                        ]
+                    },
+                )
+            )
+            call1 = mock_rsl.call_args_list[0][0]
+            call2 = mock_rsl.call_args_list[1][0]
+            # signature: (client.create_ticket, summary, desc, type, attrs)
+            self.assertEqual(call1[4]["parent"], "#10")
+            self.assertNotIn("project", call1[4])
+            self.assertEqual(call2[4]["project"], "torrent")
+            self.assertNotIn("parent", call2[4])
+
+    def test_batch_create_bad_extra_fields_fails_only_that_item(self):
+        """A malformed extra_fields for item A does not abort item B."""
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_batch.run_sync_limited"
+            ) as mock_rsl,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_batch.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_rsl.return_value = 800
+            mock_convert.side_effect = lambda x: x
+
+            result = asyncio.run(
+                _handle_batch_create(
+                    self.mock_client,
+                    {
+                        "tickets": [
+                            {
+                                "summary": "bad",
+                                "description": "d",
+                                "extra_fields": {"parent": 42},
+                            },
+                            {"summary": "good", "description": "d"},
+                        ]
+                    },
+                )
+            )
+            sc = result.structuredContent
+            self.assertEqual(sc["succeeded"], 1)
+            self.assertEqual(sc["failed_count"], 1)
+            self.assertEqual(sc["failed"][0]["summary"], "bad")
+
+    def test_batch_update_forwards_extra_fields_per_item(self):
+        """Each update's extra_fields lands in its own attributes dict."""
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_batch.run_sync_limited"
+        ) as mock_rsl:
+            mock_rsl.return_value = True
+
+            asyncio.run(
+                _handle_batch_update(
+                    self.mock_client,
+                    {
+                        "updates": [
+                            {
+                                "ticket_id": 1,
+                                "extra_fields": {"parent": "#5"},
+                            },
+                            {
+                                "ticket_id": 2,
+                                "component": "core",
+                                "extra_fields": {
+                                    "component": "ignored"
+                                },
+                            },
+                        ]
+                    },
+                )
+            )
+            # signature: (client.update_ticket, ticket_id, comment, attrs)
+            call1 = mock_rsl.call_args_list[0][0]
+            call2 = mock_rsl.call_args_list[1][0]
+            self.assertEqual(call1[3]["parent"], "#5")
+            # collision: top-level component wins
+            self.assertEqual(call2[3]["component"], "core")
+
+    def test_batch_update_bad_extra_fields_fails_only_that_item(self):
+        """A malformed extra_fields for one update leaves the others intact."""
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_batch.run_sync_limited"
+        ) as mock_rsl:
+            mock_rsl.return_value = True
+
+            result = asyncio.run(
+                _handle_batch_update(
+                    self.mock_client,
+                    {
+                        "updates": [
+                            {
+                                "ticket_id": 3,
+                                "extra_fields": ["not", "a", "dict"],
+                            },
+                            {"ticket_id": 4, "status": "closed"},
+                        ]
+                    },
+                )
+            )
+            sc = result.structuredContent
+            self.assertEqual(sc["succeeded"], 1)
+            self.assertEqual(sc["failed_count"], 1)
+            self.assertEqual(sc["failed"][0]["id"], 3)

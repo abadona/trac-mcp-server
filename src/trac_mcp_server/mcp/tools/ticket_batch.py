@@ -18,6 +18,7 @@ from ...core.client import TracClient
 from .constants import DEFAULT_TICKET_TYPE
 from .errors import build_error_response
 from .registry import ToolSpec
+from .ticket_write import merge_extra_fields
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,13 @@ TICKET_BATCH_TOOLS = [
                             "owner": {"type": "string"},
                             "keywords": {"type": "string"},
                             "cc": {"type": "string"},
+                            "extra_fields": {
+                                "type": "object",
+                                "description": "Optional map of custom Trac field name to string value, forwarded verbatim to the ticket. Use for fields defined in the instance's [ticket-custom] section that are not exposed as top-level parameters. Standard fields specified at the top level take precedence on collision.",
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                            },
                         },
                         "required": ["summary", "description"],
                     },
@@ -92,6 +100,13 @@ TICKET_BATCH_TOOLS = [
                             "owner": {"type": "string"},
                             "keywords": {"type": "string"},
                             "cc": {"type": "string"},
+                            "extra_fields": {
+                                "type": "object",
+                                "description": "Optional map of custom Trac field name to string value, forwarded verbatim to the ticket. Use for fields defined in the instance's [ticket-custom] section (e.g. 'parent' for TracChildTickets) that are not exposed as top-level parameters. An empty string clears a text-typed custom field. Standard fields specified at the top level take precedence on collision.",
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                            },
                         },
                         "required": ["ticket_id"],
                     },
@@ -160,6 +175,12 @@ async def _handle_batch_create(
             ):
                 if field in ticket_data:
                     attributes[field] = ticket_data[field]
+
+            # Merge per-item custom fields; a malformed extra_fields for
+            # this ticket raises ValueError which the enclosing except
+            # translates into a per-item failure record without aborting
+            # the batch.
+            merge_extra_fields(ticket_data, attributes)
 
             ticket_id = await run_sync_limited(
                 client.create_ticket,
@@ -321,6 +342,12 @@ async def _handle_batch_update(
             ):
                 if field in update_data:
                     attributes[field] = update_data[field]
+
+            # Merge per-item custom fields; a malformed extra_fields for
+            # this ticket raises ValueError which the enclosing except
+            # translates into a per-item failure record without aborting
+            # the batch.
+            merge_extra_fields(update_data, attributes)
 
             await run_sync_limited(
                 client.update_ticket, ticket_id, comment, attributes
