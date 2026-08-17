@@ -1,5 +1,6 @@
 import base64
 import calendar
+import socket
 import threading
 import time
 import xmlrpc.client
@@ -8,9 +9,84 @@ from typing import Any
 from xml.etree import ElementTree
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection
 
 from ..config import Config
 from ..validators import validate_content, validate_page_name
+
+# Seconds a pooled connection may sit idle before the kernel sends a TCP
+# keepalive probe. Deliberately far below the idle timeout of any plausible
+# NAT or stateful firewall between client and Trac: when such a device drops
+# its flow state it does so silently, with no RST to either end, so the socket
+# still looks established here and the next request is written into a black
+# hole and stalls until the read timeout. See tickets #21/#22 -- the failing
+# requests never reached the server at all (no access-log entry, not even a
+# 499), and only ever happened on this long-lived process after an idle gap.
+TCP_KEEPALIVE_IDLE_SECONDS = 60
+TCP_KEEPALIVE_INTERVAL_SECONDS = 15
+TCP_KEEPALIVE_PROBE_COUNT = 4
+
+
+def _keepalive_socket_options() -> list[tuple[int, int, int | bytes]]:
+    """Socket options that keep pooled connections visible to middleboxes.
+
+    Extends urllib3's defaults (TCP_NODELAY) rather than replacing them.
+    The per-idle/interval/count options are platform-specific -- Linux spells
+    the idle timer ``TCP_KEEPIDLE`` and macOS ``TCP_KEEPALIVE`` -- so each is
+    applied only where the constant exists. ``SO_KEEPALIVE`` alone is portable
+    but useless on its own: its default idle timer is 7200s on Linux, long
+    past when a NAT mapping has expired.
+    """
+    options = list(HTTPConnection.default_socket_options)
+    options.append((socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1))
+
+    idle_option = getattr(socket, "TCP_KEEPIDLE", None) or getattr(
+        socket, "TCP_KEEPALIVE", None
+    )
+    if idle_option is not None:
+        options.append(
+            (
+                socket.IPPROTO_TCP,
+                idle_option,
+                TCP_KEEPALIVE_IDLE_SECONDS,
+            )
+        )
+    if hasattr(socket, "TCP_KEEPINTVL"):
+        options.append(
+            (
+                socket.IPPROTO_TCP,
+                socket.TCP_KEEPINTVL,
+                TCP_KEEPALIVE_INTERVAL_SECONDS,
+            )
+        )
+    if hasattr(socket, "TCP_KEEPCNT"):
+        options.append(
+            (
+                socket.IPPROTO_TCP,
+                socket.TCP_KEEPCNT,
+                TCP_KEEPALIVE_PROBE_COUNT,
+            )
+        )
+    return options
+
+
+class KeepAliveHTTPAdapter(HTTPAdapter):
+    """Adapter whose pooled connections carry TCP keepalive options.
+
+    ``socket_options`` is a urllib3 pool argument rather than an
+    ``HTTPAdapter`` one, so it has to be injected where requests builds the
+    pool manager. Both entry points are covered: ``init_poolmanager`` for
+    direct connections and ``proxy_manager_for`` for proxied ones.
+    """
+
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("socket_options", _keepalive_socket_options())
+        return super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, *args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("socket_options", _keepalive_socket_options())
+        return super().proxy_manager_for(*args, **kwargs)
 
 
 class TicketCreateTimeout(Exception):
@@ -57,6 +133,14 @@ class TracClient:
         session = requests.Session()
         session.auth = (self.config.username, self.config.password)
         session.verify = not self.config.insecure
+
+        # Keep pooled connections alive at the TCP level. Without this a
+        # long-lived server that goes idle between calls silently accumulates
+        # dead sockets whenever a NAT or firewall sits in the path, and each
+        # one costs a caller a full read timeout before it is discarded.
+        adapter = KeepAliveHTTPAdapter()
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
         return session
 
     def _rpc_request(self, service: str, method: str, *params):

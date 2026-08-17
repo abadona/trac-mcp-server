@@ -1,12 +1,20 @@
 import calendar
+import socket
 from datetime import datetime
 from unittest.mock import Mock, patch
 
 import pytest
 import requests
+from urllib3.connection import HTTPConnection
 
 from trac_mcp_server.config import Config
-from trac_mcp_server.core.client import TicketCreateTimeout, TracClient
+from trac_mcp_server.core.client import (
+    TCP_KEEPALIVE_IDLE_SECONDS,
+    KeepAliveHTTPAdapter,
+    TicketCreateTimeout,
+    TracClient,
+    _keepalive_socket_options,
+)
 from trac_mcp_server.validators import (
     validate_content,
     validate_page_name,
@@ -51,6 +59,68 @@ def test_session_creation_insecure():
     )
     client = TracClient(config)
     assert not client.session.verify
+
+
+def test_session_mounts_keepalive_adapter(mock_config):
+    """Both schemes get the keepalive adapter, not requests' default one."""
+    client = TracClient(mock_config)
+    for scheme in ("http://", "https://"):
+        assert isinstance(
+            client.session.adapters[scheme], KeepAliveHTTPAdapter
+        )
+
+
+def test_keepalive_socket_options_enable_and_tighten_keepalive():
+    """SO_KEEPALIVE alone is not enough -- the idle timer must be tightened.
+
+    A bare SO_KEEPALIVE inherits the system idle timer (7200s on Linux),
+    long past the point where a NAT mapping has expired, which is the
+    failure in #21/#22.
+    """
+    options = _keepalive_socket_options()
+
+    assert (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1) in options
+
+    idle_option = getattr(socket, "TCP_KEEPIDLE", None) or getattr(
+        socket, "TCP_KEEPALIVE", None
+    )
+    if idle_option is not None:
+        idle_values = [
+            value
+            for level, option, value in options
+            if level == socket.IPPROTO_TCP and option == idle_option
+        ]
+        assert idle_values == [TCP_KEEPALIVE_IDLE_SECONDS]
+        assert TCP_KEEPALIVE_IDLE_SECONDS < 300, (
+            "idle timer must stay well below plausible NAT idle timeouts"
+        )
+
+
+def test_keepalive_socket_options_preserve_urllib3_defaults():
+    """Extends urllib3's defaults (TCP_NODELAY) rather than replacing them."""
+    options = _keepalive_socket_options()
+    for default in HTTPConnection.default_socket_options:
+        assert default in options
+
+
+def test_keepalive_adapter_passes_socket_options_to_poolmanager():
+    """The options reach urllib3, which is what actually applies them."""
+    adapter = KeepAliveHTTPAdapter()
+    assert (
+        adapter.poolmanager.connection_pool_kw["socket_options"]
+        == _keepalive_socket_options()
+    )
+
+
+def test_keepalive_adapter_respects_explicit_socket_options():
+    """An explicit caller value wins -- the default is a setdefault, not a clobber."""
+    adapter = KeepAliveHTTPAdapter()
+    custom = [(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0)]
+    adapter.init_poolmanager(1, 1, socket_options=custom)
+    assert (
+        adapter.poolmanager.connection_pool_kw["socket_options"]
+        == custom
+    )
 
 
 @patch("trac_mcp_server.core.client.requests.Session.post")
