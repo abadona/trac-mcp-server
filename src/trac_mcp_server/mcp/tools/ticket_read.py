@@ -181,9 +181,12 @@ async def _handle_search(
     """Handle ticket_search."""
     query = args.get("query", "status!=closed")
     max_results = args.get("max_results", 10)
-    include_custom_fields = bool(
-        args.get("include_custom_fields", False)
-    )
+    # Trust the schema-declared boolean type, matching the pattern used
+    # for the sibling ``raw`` parameter in _handle_get. Wrapping in bool()
+    # would misparse the string "false" as True on any MCP framework that
+    # passes JSON strings through unvalidated -- silent opt-in instead of
+    # a caller-visible type error.
+    include_custom_fields = args.get("include_custom_fields", False)
 
     # Ensure max_results is within bounds
     max_results = min(max(1, max_results), 100)
