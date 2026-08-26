@@ -26,6 +26,12 @@ from .registry import ToolSpec
 # response. Kept as a static allowlist rather than a per-request lookup of
 # ticket.getTicketFields so a new custom field added to trac.ini flows
 # through without any server-side code change.
+#
+# Trade-off: a NEW Trac CORE field introduced in a future Trac release
+# would be misclassified as custom until this set is updated. That is a
+# graceful failure -- the field still surfaces (under `custom_fields`
+# rather than at the top level of the JSON) and no data is lost. Update
+# this set when tracking a Trac release that adds a core ticket field.
 _STANDARD_ATTR_KEYS = frozenset(
     {
         "summary",

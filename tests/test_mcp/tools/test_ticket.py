@@ -1907,6 +1907,52 @@ class TestHandleTicketSearchIncludeCustomFields:
                 "scope": "torrent",
             }
 
+    def test_search_include_true_with_no_custom_fields_yields_empty_dict(
+        self,
+    ):
+        """Opt-in with a hit that has NO custom fields returns empty dict.
+
+        Locks the shape: the ``custom_fields`` key is present on every hit
+        when ``include_custom_fields=true``, populated as ``{}`` when the
+        ticket has only standard attributes. Callers can rely on the key
+        always existing under the flag.
+        """
+        client = MagicMock(spec=TracClient)
+
+        def _get_ticket_side_effect(tid):
+            return [
+                tid,
+                "20260101T00:00:00",
+                "20260101T00:00:00",
+                {
+                    "summary": f"T{tid}",
+                    "status": "new",
+                    "owner": "alice",
+                    # No custom fields -- only Trac core keys.
+                },
+            ]
+
+        async def _fake_run_sync_limited(func, *args, **kwargs):
+            return _get_ticket_side_effect(*args, **kwargs)
+
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync_limited",
+                side_effect=_fake_run_sync_limited,
+            ),
+        ):
+            mock_run_sync.return_value = [1]
+
+            result = self._run(
+                _handle_search(client, {"include_custom_fields": True})
+            )
+            hits = result.structuredContent["tickets"]
+            assert len(hits) == 1
+            assert hits[0].get("custom_fields") == {}
+
 
 class TestHandleTicketChangelog:
     """Tests for _handle_changelog handler."""

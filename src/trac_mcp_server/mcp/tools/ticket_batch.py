@@ -25,9 +25,19 @@ logger = logging.getLogger(__name__)
 # Per-item accepted keys, mirroring the JSON-Schema `properties` on each
 # batch tool. Unknown per-item keys are rejected as a per-item failure so
 # one malformed item does not silently no-op while the batch as a whole
-# reports success. Distinct from the single-tool sets because the batch
-# schemas do not currently expose ``severity``, ``summary``, ``description``,
-# ``type``, or ``action`` in the update variant.
+# reports success.
+#
+# These sets are strict subsets of the single-tool accepted-key sets in
+# ticket_write.py, matching the batch tools' schemas as advertised:
+#   - Batch create is missing ``severity`` (vs single create).
+#   - Batch update is missing ``severity``, ``summary``, ``description``,
+#     ``type``, ``action``, and the ``action_*`` workflow-input pattern
+#     (vs single update).
+# Callers needing those fields must use the single-item tools. Prior to
+# #1163 these keys were silently dropped by the batch handlers; they now
+# fail loudly per-item, which is a strict improvement over the silent
+# no-op but a visible behavior change for any caller that relied on the
+# drop.
 _BATCH_CREATE_ITEM_ACCEPTED_KEYS = frozenset(
     {
         "summary",
