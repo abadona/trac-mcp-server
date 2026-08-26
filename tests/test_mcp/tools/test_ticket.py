@@ -939,32 +939,103 @@ class TestHandleTicketUpdate(unittest.TestCase):
                 attrs["action_reassign_reassign_owner"], "bob"
             )
 
-    def test_update_unknown_kwargs_still_dropped(self):
-        """Non-allowlisted, non-action_-prefixed kwargs are silently dropped.
+    def test_update_unknown_kwargs_rejected(self):
+        """Unknown, non-action_-prefixed kwargs are rejected with a
+        validation_error (refs #1163).
 
-        Locks the contract: only the documented allowlist + action_*
-        pattern reach the wire.  Random unknown keys (typos, future-proofing
-        attempts) do NOT get forwarded.
+        Prior to #1163 the handler silently dropped unknown top-level keys,
+        so a typo like ``scope`` or ``project`` (a real custom field) would
+        return "Updated (no changes)" instead of failing loudly. The new
+        contract rejects those calls before any RPC is issued and points
+        the caller at ``extra_fields`` as the sanctioned custom-field path.
         """
         with patch(
             "trac_mcp_server.mcp.tools.ticket_write.run_sync"
         ) as mock_run_sync:
             mock_run_sync.return_value = True
-            asyncio.run(
+            result = asyncio.run(
                 _handle_update(
                     self.mock_client,
                     {
                         "ticket_id": 16,
                         "status": "accepted",
-                        "not_a_field": "should-be-dropped",
-                        "act": "should-also-be-dropped",
+                        "not_a_field": "should-be-rejected",
+                        "act": "should-also-be-rejected",
                     },
                 )
             )
+
+            # No RPC was issued -- rejection happens before the client
+            # call.
+            mock_run_sync.assert_not_called()
+
+            assert isinstance(result, types.CallToolResult)
+            self.assertTrue(result.isError)
+            text = result.content[0].text
+            self.assertIn("Error (validation_error)", text)
+            self.assertIn("'not_a_field'", text)
+            self.assertIn("'act'", text)
+            self.assertIn("extra_fields", text)
+
+    def test_update_workflow_action_prefix_still_accepted(self):
+        """action_* keys (Trac workflow input fields) are accepted alongside
+        the fixed allowlist (refs #1163).
+
+        Guards the wildcard exception in the unknown-key check so a
+        legitimate ``action_resolve_resolve_resolution`` call is NOT
+        rejected as an unknown parameter.
+        """
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+        ) as mock_run_sync:
+            mock_run_sync.return_value = True
+            result = asyncio.run(
+                _handle_update(
+                    self.mock_client,
+                    {
+                        "ticket_id": 42,
+                        "action": "resolve",
+                        "action_resolve_resolve_resolution": "fixed",
+                    },
+                )
+            )
+
+            assert isinstance(result, types.CallToolResult)
+            self.assertFalse(getattr(result, "isError", False))
             attrs = mock_run_sync.call_args[0][3]
-            self.assertIn("status", attrs)
-            self.assertNotIn("not_a_field", attrs)
-            self.assertNotIn("act", attrs)
+            self.assertEqual(attrs.get("action"), "resolve")
+            self.assertEqual(
+                attrs.get("action_resolve_resolve_resolution"), "fixed"
+            )
+
+    def test_create_unknown_kwargs_rejected(self):
+        """ticket_create rejects unknown top-level parameters (refs #1163).
+
+        Mirrors the update case so a stray ``project=...`` in a
+        ticket_create call fails loudly instead of dropping the custom
+        field silently.
+        """
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_write.run_sync"
+        ) as mock_run_sync:
+            result = asyncio.run(
+                _handle_create(
+                    self.mock_client,
+                    {
+                        "summary": "s",
+                        "description": "d",
+                        "project": "TMAP",
+                    },
+                )
+            )
+
+            mock_run_sync.assert_not_called()
+            assert isinstance(result, types.CallToolResult)
+            self.assertTrue(result.isError)
+            text = result.content[0].text
+            self.assertIn("Error (validation_error)", text)
+            self.assertIn("'project'", text)
+            self.assertIn("extra_fields", text)
 
 
 # ---------------------------------------------------------------------------
@@ -1528,6 +1599,313 @@ class TestHandleTicketGet:
             assert isinstance(result, types.CallToolResult)
             assert result.isError is True
             assert "Error (not_found)" in result.content[0].text
+
+
+class TestHandleTicketGetCustomFields:
+    """Tests for _handle_get custom-field pass-through (refs #1163).
+
+    ticket_get must surface every field in the XML-RPC attributes dict that
+    is not one of Trac's core standard fields, both in the JSON response
+    (as ``custom_fields``) and in the text rendering (as a compact section
+    listing populated custom fields only).
+    """
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def _fake_ticket(self, attrs, *, ticket_id=100):
+        """Return a fake XML-RPC ticket.get() tuple with the given attrs."""
+        created = datetime(2026, 1, 10, 9, 0, 0)
+        modified = datetime(2026, 1, 15, 14, 30, 0)
+        # Fill in any missing standard keys so the extractor and text
+        # renderer have safe defaults.
+        base = {
+            "summary": attrs.get("summary", "S"),
+            "description": attrs.get("description", ""),
+            "status": attrs.get("status", "new"),
+            "owner": attrs.get("owner", ""),
+            "reporter": attrs.get("reporter", ""),
+            "type": attrs.get("type", "defect"),
+            "priority": attrs.get("priority", "normal"),
+            "component": attrs.get("component", ""),
+            "milestone": attrs.get("milestone", ""),
+            "keywords": attrs.get("keywords", ""),
+            "cc": attrs.get("cc", ""),
+            "resolution": attrs.get("resolution", ""),
+        }
+        base.update(attrs)
+        return [ticket_id, created, modified, base]
+
+    def test_custom_fields_surfaced_in_json(self):
+        """Non-standard attrs land in the JSON `custom_fields` object."""
+        client = MagicMock(spec=TracClient)
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.tracwiki_to_markdown"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = self._fake_ticket(
+                {
+                    "summary": "Ticket with customs",
+                    "scope": "torrent",
+                    "project": "TMAP",
+                    "parent": "#385",
+                }
+            )
+            mock_convert.return_value = ConversionResult(
+                text="",
+                source_format="tracwiki",
+                target_format="markdown",
+                converted=True,
+            )
+
+            result = self._run(_handle_get(client, {"ticket_id": 100}))
+
+            assert isinstance(result, types.CallToolResult)
+            custom = result.structuredContent["custom_fields"]
+            assert custom == {
+                "scope": "torrent",
+                "project": "TMAP",
+                "parent": "#385",
+            }
+
+    def test_custom_fields_rendered_in_text_when_populated(self):
+        """Populated custom fields appear in the ## Custom Fields section."""
+        client = MagicMock(spec=TracClient)
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.tracwiki_to_markdown"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = self._fake_ticket(
+                {
+                    "scope": "torrent",
+                    "project": "TMAP",
+                }
+            )
+            mock_convert.return_value = ConversionResult(
+                text="",
+                source_format="tracwiki",
+                target_format="markdown",
+                converted=True,
+            )
+
+            result = self._run(_handle_get(client, {"ticket_id": 100}))
+            text = result.content[0].text
+            assert "## Custom Fields" in text
+            assert "scope: torrent" in text
+            assert "project: TMAP" in text
+
+    def test_empty_custom_field_in_json_but_not_text(self):
+        """A defined-but-cleared custom field is retained in JSON, hidden in text.
+
+        The JSON keeps every non-standard attribute (including empty
+        strings) so a caller can distinguish "defined and cleared" from
+        "not defined". The text output stays compact by rendering only
+        populated entries.
+        """
+        client = MagicMock(spec=TracClient)
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.tracwiki_to_markdown"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = self._fake_ticket(
+                {"parent": "", "scope": "torrent"}
+            )
+            mock_convert.return_value = ConversionResult(
+                text="",
+                source_format="tracwiki",
+                target_format="markdown",
+                converted=True,
+            )
+
+            result = self._run(_handle_get(client, {"ticket_id": 100}))
+            custom = result.structuredContent["custom_fields"]
+            assert custom == {"parent": "", "scope": "torrent"}
+
+            text = result.content[0].text
+            assert "## Custom Fields" in text
+            assert "scope: torrent" in text
+            assert "parent:" not in text
+
+    def test_no_custom_fields_yields_empty_dict_and_no_section(self):
+        """Ticket with only standard attrs returns custom_fields={} and no section."""
+        client = MagicMock(spec=TracClient)
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.tracwiki_to_markdown"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = self._fake_ticket({})
+            mock_convert.return_value = ConversionResult(
+                text="",
+                source_format="tracwiki",
+                target_format="markdown",
+                converted=True,
+            )
+
+            result = self._run(_handle_get(client, {"ticket_id": 100}))
+            assert result.structuredContent["custom_fields"] == {}
+            assert "## Custom Fields" not in result.content[0].text
+
+    def test_standard_keys_never_appear_in_custom_fields(self):
+        """Existing standard keys stay under their fixed JSON keys.
+
+        Backward-compat guard: an agent that reads
+        ``structuredContent['summary']`` must keep working, and the same
+        value must NOT also appear inside ``custom_fields``.
+        """
+        client = MagicMock(spec=TracClient)
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.tracwiki_to_markdown"
+            ) as mock_convert,
+        ):
+            mock_run_sync.return_value = self._fake_ticket(
+                {
+                    "summary": "Std",
+                    "severity": "major",
+                    "version": "1.2",
+                    "_ts": "12345",
+                    "project": "TMAP",
+                }
+            )
+            mock_convert.return_value = ConversionResult(
+                text="",
+                source_format="tracwiki",
+                target_format="markdown",
+                converted=True,
+            )
+
+            result = self._run(_handle_get(client, {"ticket_id": 100}))
+            custom = result.structuredContent["custom_fields"]
+            # Trac core / internal keys must NOT be in custom_fields.
+            assert "summary" not in custom
+            assert "severity" not in custom
+            assert "version" not in custom
+            assert "_ts" not in custom
+            # Actual custom field IS.
+            assert custom == {"project": "TMAP"}
+
+
+class TestHandleTicketSearchIncludeCustomFields:
+    """Tests for _handle_search opt-in custom-field expansion (refs #1163).
+
+    include_custom_fields defaults to false to preserve the compact search
+    response. When true, each hit's record gets a ``custom_fields`` object
+    populated the same way as ``ticket_get``.
+    """
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_search_schema_advertises_include_custom_fields(self):
+        """ticket_search schema declares include_custom_fields as a bool."""
+        tool = next(
+            t for t in TICKET_TOOLS if t.name == "ticket_search"
+        )
+        prop = tool.inputSchema["properties"].get(
+            "include_custom_fields"
+        )
+        assert prop is not None, (
+            "ticket_search must expose include_custom_fields"
+        )
+        assert prop["type"] == "boolean"
+        assert prop["default"] is False
+
+    def test_search_default_omits_custom_fields(self):
+        """Without the flag, per-hit records have NO custom_fields key."""
+        client = MagicMock(spec=TracClient)
+
+        def _get_ticket_side_effect(tid):
+            return [
+                tid,
+                "20260101T00:00:00",
+                "20260101T00:00:00",
+                {
+                    "summary": f"T{tid}",
+                    "status": "new",
+                    "owner": "alice",
+                    "project": "TMAP",
+                },
+            ]
+
+        async def _fake_run_sync_limited(func, *args, **kwargs):
+            return _get_ticket_side_effect(*args, **kwargs)
+
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync_limited",
+                side_effect=_fake_run_sync_limited,
+            ),
+        ):
+            mock_run_sync.return_value = [1]
+
+            result = self._run(_handle_search(client, {}))
+            hits = result.structuredContent["tickets"]
+            assert len(hits) == 1
+            assert "custom_fields" not in hits[0]
+
+    def test_search_include_true_expands_per_hit_custom_fields(self):
+        """With the flag, each hit gets a custom_fields object."""
+        client = MagicMock(spec=TracClient)
+
+        def _get_ticket_side_effect(tid):
+            return [
+                tid,
+                "20260101T00:00:00",
+                "20260101T00:00:00",
+                {
+                    "summary": f"T{tid}",
+                    "status": "new",
+                    "owner": "alice",
+                    "project": "TMAP",
+                    "scope": "torrent",
+                },
+            ]
+
+        async def _fake_run_sync_limited(func, *args, **kwargs):
+            return _get_ticket_side_effect(*args, **kwargs)
+
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync"
+            ) as mock_run_sync,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_read.run_sync_limited",
+                side_effect=_fake_run_sync_limited,
+            ),
+        ):
+            mock_run_sync.return_value = [1]
+
+            result = self._run(
+                _handle_search(client, {"include_custom_fields": True})
+            )
+            hits = result.structuredContent["tickets"]
+            assert len(hits) == 1
+            assert hits[0]["custom_fields"] == {
+                "project": "TMAP",
+                "scope": "torrent",
+            }
 
 
 class TestHandleTicketChangelog:

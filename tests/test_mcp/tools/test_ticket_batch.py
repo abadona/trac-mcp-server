@@ -312,6 +312,50 @@ class TestHandleBatchCreate(unittest.TestCase):
             first_call = mock_rsl.call_args_list[0]
             self.assertEqual(first_call[0][2], "wiki:**bold**")
 
+    def test_batch_create_unknown_per_item_key_isolated(self):
+        """One item with an unknown key fails; other items still land (refs #1163).
+
+        Guards the per-item semantic of the unknown-key check: a stray
+        ``project`` in item 0 must not block the create of item 1.
+        """
+        with (
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_batch.run_sync_limited"
+            ) as mock_rsl,
+            patch(
+                "trac_mcp_server.mcp.tools.ticket_batch.markdown_to_tracwiki"
+            ) as mock_convert,
+        ):
+            mock_rsl.side_effect = [42]
+            mock_convert.side_effect = lambda x: f"wiki:{x}"
+
+            result = asyncio.run(
+                _handle_batch_create(
+                    self.mock_client,
+                    {
+                        "tickets": [
+                            {
+                                "summary": "Bad",
+                                "description": "D",
+                                "project": "TMAP",
+                            },
+                            {"summary": "Good", "description": "D"},
+                        ]
+                    },
+                )
+            )
+
+            sc = result.structuredContent
+            self.assertEqual(sc["succeeded"], 1)
+            self.assertEqual(sc["failed_count"], 1)
+            self.assertEqual(sc["created"][0]["id"], 42)
+            fail = sc["failed"][0]
+            self.assertEqual(fail["index"], 0)
+            self.assertIn("'project'", fail["error"])
+            self.assertIn("extra_fields", fail["error"])
+            # Only ONE RPC call for the surviving item.
+            self.assertEqual(mock_rsl.call_count, 1)
+
 
 class TestHandleBatchDelete(unittest.TestCase):
     """Tests for _handle_batch_delete handler."""
@@ -550,6 +594,44 @@ class TestHandleBatchUpdate(unittest.TestCase):
         self.assertIn(
             "Batch size 2 exceeds maximum 1", result.content[0].text
         )
+
+    def test_batch_update_unknown_per_item_key_isolated(self):
+        """One item with unknown key fails; other items still land (refs #1163).
+
+        Guards the per-item semantic of the unknown-key check on
+        ticket_batch_update: a stray ``scope`` in item 0 must not block
+        the update of item 1.
+        """
+        with patch(
+            "trac_mcp_server.mcp.tools.ticket_batch.run_sync_limited"
+        ) as mock_rsl:
+            mock_rsl.return_value = True
+
+            result = asyncio.run(
+                _handle_batch_update(
+                    self.mock_client,
+                    {
+                        "updates": [
+                            {
+                                "ticket_id": 1,
+                                "status": "closed",
+                                "scope": "torrent",
+                            },
+                            {"ticket_id": 2, "status": "closed"},
+                        ]
+                    },
+                )
+            )
+
+            sc = result.structuredContent
+            self.assertEqual(sc["succeeded"], 1)
+            self.assertEqual(sc["failed_count"], 1)
+            self.assertIn(2, sc["updated"])
+            fail = sc["failed"][0]
+            self.assertEqual(fail["id"], 1)
+            self.assertIn("'scope'", fail["error"])
+            self.assertIn("extra_fields", fail["error"])
+            self.assertEqual(mock_rsl.call_count, 1)
 
 
 class TestHandleTicketBatchToolDispatcher(unittest.TestCase):

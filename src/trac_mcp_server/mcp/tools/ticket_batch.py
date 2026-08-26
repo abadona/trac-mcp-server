@@ -22,6 +22,59 @@ from .ticket_write import merge_extra_fields
 
 logger = logging.getLogger(__name__)
 
+# Per-item accepted keys, mirroring the JSON-Schema `properties` on each
+# batch tool. Unknown per-item keys are rejected as a per-item failure so
+# one malformed item does not silently no-op while the batch as a whole
+# reports success. Distinct from the single-tool sets because the batch
+# schemas do not currently expose ``severity``, ``summary``, ``description``,
+# ``type``, or ``action`` in the update variant.
+_BATCH_CREATE_ITEM_ACCEPTED_KEYS = frozenset(
+    {
+        "summary",
+        "description",
+        "ticket_type",
+        "priority",
+        "component",
+        "milestone",
+        "owner",
+        "cc",
+        "keywords",
+        "extra_fields",
+    }
+)
+
+_BATCH_UPDATE_ITEM_ACCEPTED_KEYS = frozenset(
+    {
+        "ticket_id",
+        "comment",
+        "status",
+        "resolution",
+        "priority",
+        "component",
+        "milestone",
+        "owner",
+        "cc",
+        "keywords",
+        "extra_fields",
+    }
+)
+
+
+def _find_unknown_keys(
+    item: dict, accepted: frozenset[str]
+) -> list[str]:
+    """Return sorted list of ``item`` keys that are not in ``accepted``."""
+    return sorted(k for k in item if k not in accepted)
+
+
+def _format_unknown_keys_error(unknown: list[str]) -> str:
+    """Format a per-item error message naming the offending keys."""
+    joined = ", ".join(repr(k) for k in unknown)
+    return (
+        f"Unknown parameter(s): {joined}. Use `extra_fields` for custom "
+        "Trac fields."
+    )
+
 
 # Tool definitions for list_tools()
 TICKET_BATCH_TOOLS = [
@@ -142,6 +195,18 @@ async def _handle_batch_create(
     async def _create_one(
         index: int, ticket_data: dict
     ) -> dict[str, Any]:
+        # Reject unknown per-item keys before any work so a mistaken
+        # top-level custom-field write does not silently no-op the item.
+        unknown = _find_unknown_keys(
+            ticket_data, _BATCH_CREATE_ITEM_ACCEPTED_KEYS
+        )
+        if unknown:
+            return {
+                "index": index,
+                "summary": ticket_data.get("summary", ""),
+                "error": _format_unknown_keys_error(unknown),
+            }
+
         summary = ticket_data.get("summary")
         description = ticket_data.get("description")
 
@@ -317,6 +382,18 @@ async def _handle_batch_update(
         )
 
     async def _update_one(update_data: dict) -> dict[str, Any]:
+        # Reject unknown per-item keys before any work; same rationale as
+        # ticket_batch_create (silent no-op is the failure mode #1163
+        # closes).
+        unknown = _find_unknown_keys(
+            update_data, _BATCH_UPDATE_ITEM_ACCEPTED_KEYS
+        )
+        if unknown:
+            return {
+                "id": update_data.get("ticket_id", 0),
+                "error": _format_unknown_keys_error(unknown),
+            }
+
         ticket_id = update_data.get("ticket_id")
         if not ticket_id:
             return {

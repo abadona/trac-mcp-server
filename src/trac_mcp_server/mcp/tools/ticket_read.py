@@ -20,6 +20,60 @@ from ...core.client import TracClient
 from .errors import build_error_response, format_timestamp
 from .registry import ToolSpec
 
+# Trac core ticket fields plus internal/reserved keys. Anything in the
+# XML-RPC ticket.get() attributes dict that is NOT in this set is treated
+# as a custom field (defined in [ticket-custom]) and passed through in the
+# response. Kept as a static allowlist rather than a per-request lookup of
+# ticket.getTicketFields so a new custom field added to trac.ini flows
+# through without any server-side code change.
+_STANDARD_ATTR_KEYS = frozenset(
+    {
+        "summary",
+        "description",
+        "status",
+        "owner",
+        "reporter",
+        "type",
+        "priority",
+        "component",
+        "milestone",
+        "keywords",
+        "cc",
+        "resolution",
+        "severity",
+        "version",
+        # Fields Trac returns at the outer tuple level; guard in case a
+        # Trac release also mirrors them into attrs.
+        "id",
+        "time",
+        "changetime",
+        # Trac's optimistic-locking token, present in some Trac releases.
+        "_ts",
+    }
+)
+
+
+def _extract_custom_fields(attrs: dict) -> dict[str, Any]:
+    """Return the subset of ``attrs`` that represents custom Trac fields.
+
+    A "custom field" is any key in the XML-RPC attributes dict that is not
+    one of Trac's core ticket fields (see ``_STANDARD_ATTR_KEYS``). Values
+    are returned verbatim -- including empty strings, which are meaningful
+    (a defined custom field that has been cleared).
+
+    Args:
+        attrs: The attributes dict returned by ``ticket.get`` (the fourth
+            element of the XML-RPC tuple).
+
+    Returns:
+        A dict of custom-field name to value. Empty when the ticket has no
+        custom fields configured on the instance.
+    """
+    return {
+        k: v for k, v in attrs.items() if k not in _STANDARD_ATTR_KEYS
+    }
+
+
 # Tool definitions for list_tools()
 TICKET_READ_TOOLS = [
     types.Tool(
@@ -38,6 +92,11 @@ TICKET_READ_TOOLS = [
                     "default": 10,
                     "minimum": 1,
                     "maximum": 100,
+                },
+                "include_custom_fields": {
+                    "type": "boolean",
+                    "description": "If true, include a `custom_fields` object on each per-ticket record with the ticket's non-standard fields (e.g. 'parent', 'scope', 'project'). Default: false, keeps the compact search response unchanged.",
+                    "default": False,
                 },
             },
             "required": [],
@@ -116,6 +175,9 @@ async def _handle_search(
     """Handle ticket_search."""
     query = args.get("query", "status!=closed")
     max_results = args.get("max_results", 10)
+    include_custom_fields = bool(
+        args.get("include_custom_fields", False)
+    )
 
     # Ensure max_results is within bounds
     max_results = min(max(1, max_results), 100)
@@ -152,12 +214,15 @@ async def _handle_search(
             attrs = ticket_data[
                 3
             ]  # [id, created, modified, attributes]
-            return {
+            record: dict[str, Any] = {
                 "id": tid,
                 "summary": attrs.get("summary", ""),
                 "status": attrs.get("status", ""),
                 "owner": attrs.get("owner", ""),
             }
+            if include_custom_fields:
+                record["custom_fields"] = _extract_custom_fields(attrs)
+            return record
         except Exception:
             failed_ids.append(tid)
             return None
@@ -249,6 +314,12 @@ async def _handle_get(
     cc = attrs.get("cc", "")
     resolution = attrs.get("resolution", "")
 
+    # Pass through any custom fields (defined in [ticket-custom]) that Trac
+    # returns alongside the standard fields. Retain the raw attribute dict
+    # for the JSON payload -- including empty-value entries, which mean
+    # "field is defined but has been cleared" and are meaningful to callers.
+    custom_fields = _extract_custom_fields(attrs)
+
     # Convert description from TracWiki to Markdown unless raw mode is requested
     if raw:
         description_output = description
@@ -269,10 +340,25 @@ async def _handle_get(
         f"Keywords: {keywords} | Cc: {cc}"
         + (f" | Resolution: {resolution}" if resolution else ""),
         f"Created: {created_str} | Modified: {modified_str}",
-        "",
-        f"## Description{format_note}",
-        description_output,
     ]
+
+    # Render only populated custom fields in the text output to keep the
+    # display compact when the ticket has custom fields defined but empty.
+    # The JSON structure keeps the full set for programmatic access.
+    populated_custom = {k: v for k, v in custom_fields.items() if v}
+    if populated_custom:
+        response_lines.append("")
+        response_lines.append("## Custom Fields")
+        for key in sorted(populated_custom):
+            response_lines.append(f"{key}: {populated_custom[key]}")
+
+    response_lines.extend(
+        [
+            "",
+            f"## Description{format_note}",
+            description_output,
+        ]
+    )
 
     # Build structured JSON (use json.dumps with default=str for datetime serialization)
     ticket_json = {
@@ -291,6 +377,10 @@ async def _handle_get(
         "resolution": resolution,
         "created": created_str,
         "modified": modified_str,
+        # ``custom_fields`` is always present (as an object; empty when the
+        # ticket has no custom fields). Stable presence simplifies downstream
+        # parsing over conditional presence.
+        "custom_fields": custom_fields,
     }
 
     return types.CallToolResult(

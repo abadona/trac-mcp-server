@@ -17,6 +17,87 @@ from .constants import DEFAULT_TICKET_TYPE, TICKET_TYPE_LIST
 from .errors import build_error_response
 from .registry import ToolSpec
 
+# Top-level parameters accepted by ticket_create. Custom Trac fields must
+# be sent via ``extra_fields`` (see #1159); a stray top-level key such as
+# a typo or a mistaken "just pass the field name" attempt is rejected so
+# the write cannot silently no-op.
+_CREATE_ACCEPTED_KEYS = frozenset(
+    {
+        "summary",
+        "description",
+        "ticket_type",
+        "priority",
+        "severity",
+        "component",
+        "milestone",
+        "owner",
+        "cc",
+        "keywords",
+        "extra_fields",
+    }
+)
+
+# Top-level parameters accepted by ticket_update. Same rationale as
+# _CREATE_ACCEPTED_KEYS, plus a wildcard for Trac workflow-action input
+# fields matching the pattern ``action_<action>_<action>_<field>`` (e.g.
+# ``action_resolve_resolve_resolution``) which the handler forwards to
+# Trac.
+_UPDATE_ACCEPTED_KEYS = frozenset(
+    {
+        "ticket_id",
+        "comment",
+        "summary",
+        "description",
+        "type",
+        "status",
+        "action",
+        "priority",
+        "severity",
+        "component",
+        "milestone",
+        "owner",
+        "resolution",
+        "cc",
+        "keywords",
+        "extra_fields",
+    }
+)
+
+
+def _reject_unknown_keys(
+    args: dict,
+    accepted: frozenset[str],
+    *,
+    allow_action_prefix: bool = False,
+) -> types.CallToolResult | None:
+    """Return a validation_error CallToolResult if ``args`` has unknown keys.
+
+    A top-level key is "unknown" when it is not in ``accepted`` and, if
+    ``allow_action_prefix`` is set, is not a Trac workflow-input key
+    (``action_...``). The response points the caller at ``extra_fields`` as
+    the sanctioned path for custom Trac fields, so a mistaken top-level
+    write does not silently no-op the way it did prior to #1163.
+
+    Returns ``None`` when every key is accepted, so callers can early-exit
+    with ``if resp := _reject_unknown_keys(...): return resp``.
+    """
+    unknown = sorted(
+        k
+        for k in args
+        if k not in accepted
+        and not (allow_action_prefix and k.startswith("action_"))
+    )
+    if not unknown:
+        return None
+    joined = ", ".join(repr(k) for k in unknown)
+    return build_error_response(
+        "validation_error",
+        f"Unknown parameter(s): {joined}.",
+        "Use `extra_fields` to set Trac custom fields (fields declared in "
+        "the instance's [ticket-custom] section). Standard tool parameters "
+        f"are: {', '.join(sorted(accepted))}.",
+    )
+
 
 def merge_extra_fields(source: dict, attributes: dict) -> None:
     """Merge source['extra_fields'] into attributes, honoring precedence.
@@ -225,6 +306,12 @@ async def _handle_create(
     client: TracClient, args: dict
 ) -> types.CallToolResult:
     """Handle ticket_create."""
+    # Fail loudly on unknown top-level parameters -- silent-drop is the
+    # historical footgun this ticket (#1163) closes end-to-end alongside
+    # the read side.
+    if resp := _reject_unknown_keys(args, _CREATE_ACCEPTED_KEYS):
+        return resp
+
     summary = args.get("summary")
     description = args.get("description")
 
@@ -312,6 +399,14 @@ async def _handle_update(
     client: TracClient, args: dict
 ) -> types.CallToolResult:
     """Handle ticket_update."""
+    # Fail loudly on unknown top-level parameters. ``action_*`` (Trac
+    # workflow input keys) are legitimate and permitted alongside the
+    # fixed allowlist.
+    if resp := _reject_unknown_keys(
+        args, _UPDATE_ACCEPTED_KEYS, allow_action_prefix=True
+    ):
+        return resp
+
     ticket_id = args.get("ticket_id")
     if not ticket_id:
         return build_error_response(
