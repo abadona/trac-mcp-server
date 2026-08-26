@@ -90,7 +90,7 @@ def _format_unknown_keys_error(unknown: list[str]) -> str:
 TICKET_BATCH_TOOLS = [
     types.Tool(
         name="ticket_batch_create",
-        description="Create multiple tickets in a single batch operation. Best-effort: all items attempted, per-item results reported. Bounded by TRAC_MAX_PARALLEL_REQUESTS semaphore.",
+        description="Create multiple tickets in a single batch operation. Best-effort: all items attempted, per-item results reported. Bounded by TRAC_MAX_PARALLEL_REQUESTS semaphore. Per-item fields are a strict subset of ticket_create -- ``severity`` is not accepted here; use extra_fields for custom Trac fields.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -141,7 +141,7 @@ TICKET_BATCH_TOOLS = [
     ),
     types.Tool(
         name="ticket_batch_update",
-        description="Update multiple tickets in a single batch operation. Best-effort: all items attempted, per-item results reported.",
+        description="Update multiple tickets in a single batch operation. Best-effort: all items attempted, per-item results reported. Per-item fields are a strict subset of ticket_update -- ``summary``, ``description``, ``type``, ``severity``, ``action``, and workflow ``action_*`` inputs are not accepted here; use ticket_update for those. extra_fields is supported for custom Trac fields.",
         inputSchema={
             "type": "object",
             "properties": {

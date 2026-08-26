@@ -84,7 +84,7 @@ def _extract_custom_fields(attrs: dict) -> dict[str, Any]:
 TICKET_READ_TOOLS = [
     types.Tool(
         name="ticket_search",
-        description="Search tickets with filtering by status, owner, and keywords. Returns ticket IDs with summaries.",
+        description="Search tickets with filtering by status, owner, and keywords. Returns ticket IDs with summaries. Set include_custom_fields=true to also return the ticket's custom fields (from the instance's [ticket-custom] section) on each per-hit record.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -110,7 +110,7 @@ TICKET_READ_TOOLS = [
     ),
     types.Tool(
         name="ticket_get",
-        description="Get full ticket details including summary, description, status, and owner. Use ticket_changelog for history. Set raw=true to get description in original TracWiki format without conversion.",
+        description="Get full ticket details including summary, description, status, and owner. Any custom fields defined in the instance's [ticket-custom] section (e.g. 'parent' for TracChildTickets, site-specific 'scope' or 'project') are returned in the JSON `custom_fields` object and rendered under a `## Custom Fields` section in the text output when populated. Use ticket_changelog for history. Set raw=true to get description in original TracWiki format without conversion.",
         inputSchema={
             "type": "object",
             "properties": {
